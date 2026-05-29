@@ -1,0 +1,27 @@
+{
+  "root": "/tmp/example-project",
+  "structure": [
+    {"name": "cmd", "type": "dir"},
+    {"name": "internal", "type": "dir"},
+    {"name": "README.md", "type": "file", "size": 245},
+    {"name": "go.mod", "type": "file", "size": 78},
+    {"name": "Makefile", "type": "file", "size": 156}
+  ],
+  "key_files": [
+    {"path": "README.md", "name": "README.md", "content": "# daily-report-daemon\n\nA local-first dev activity observer & report generator.\n\nPhase 0 (current): CLI prototype for single Git repository.\n"},
+    {"path": "go.mod", "name": "go.mod", "content": "module github.com/daily-report-daemon\n\ngo 1.21\n"},
+    {"path": "Makefile", "name": "Makefile", "content": "build:\n\tgo build ./...\ntest:\n\tgo test ./...\nlint:\n\tgolangci-lint run\n"}
+  ],
+  "languages": [
+    {"language": "Go", "files": 15},
+    {"language": "Markdown", "files": 5}
+  ],
+  "build_commands": [
+    {"command": "go build ./...", "source": "Makefile"}
+  ],
+  "test_commands": [
+    {"command": "go test ./...", "source": "Makefile"}
+  ],
+  "total_files": 20,
+  "total_text_files": 18
+}

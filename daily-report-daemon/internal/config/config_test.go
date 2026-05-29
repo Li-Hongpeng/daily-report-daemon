@@ -1,0 +1,66 @@
+package config
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+func TestDefaultConfig(t *testing.T) {
+	cfg := DefaultConfig("/tmp/test-repo")
+	if cfg.Version != "1" {
+		t.Errorf("expected version 1, got %s", cfg.Version)
+	}
+	if cfg.Language != "zh-CN" {
+		t.Errorf("expected zh-CN, got %s", cfg.Language)
+	}
+	if cfg.Workspace.Path != "/tmp/test-repo" {
+		t.Errorf("expected workspace path /tmp/test-repo, got %s", cfg.Workspace.Path)
+	}
+	if cfg.Workspace.Type != "git_repo" {
+		t.Errorf("expected git_repo, got %s", cfg.Workspace.Type)
+	}
+	if !cfg.Workspace.GitEnabled {
+		t.Error("expected git_enabled true")
+	}
+}
+
+func TestSaveAndLoad(t *testing.T) {
+	cfg := DefaultConfig("/tmp/test-load")
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+
+	if err := cfg.Save(path); err != nil {
+		t.Fatalf("Save failed: %v", err)
+	}
+
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+
+	if loaded.Workspace.Path != cfg.Workspace.Path {
+		t.Errorf("workspace path mismatch: got %s, want %s", loaded.Workspace.Path, cfg.Workspace.Path)
+	}
+	if loaded.LLM.Model != cfg.LLM.Model {
+		t.Errorf("model mismatch: got %s, want %s", loaded.LLM.Model, cfg.LLM.Model)
+	}
+}
+
+func TestCheckAPIKeyMissing(t *testing.T) {
+	cfg := DefaultConfig("/tmp/test")
+	// Ensure env var is unset
+	os.Unsetenv("OPENAI_API_KEY")
+	if err := cfg.CheckAPIKey(); err == nil {
+		t.Error("expected error when API key not set")
+	}
+}
+
+func TestCheckAPIKeyPresent(t *testing.T) {
+	cfg := DefaultConfig("/tmp/test")
+	os.Setenv("OPENAI_API_KEY", "sk-test")
+	defer os.Unsetenv("OPENAI_API_KEY")
+	if err := cfg.CheckAPIKey(); err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+}

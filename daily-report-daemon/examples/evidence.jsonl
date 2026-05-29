@@ -1,0 +1,9 @@
+{"id":"commit:abc123def456","type":"commit","workspace":"example-project","path":"","summary":"[abc123de] dev: feat: add report generator module","raw_ref":"abc123def456","sensitivity":"low","source":"git"}
+{"id":"diff:internal/report/generator.go:unstaged","type":"diff","workspace":"example-project","path":"internal/report/generator.go","summary":"unstaged internal/report/generator.go (added): +45 -0","raw_ref":"git diff (unstaged)","sensitivity":"low","source":"git"}
+{"id":"diff:internal/git/analyzer.go:staged","type":"diff","workspace":"example-project","path":"internal/git/analyzer.go","summary":"staged internal/git/analyzer.go (modified): +12 -3","raw_ref":"git diff (staged)","sensitivity":"low","source":"git"}
+{"id":"doc:README.md","type":"doc_snippet","workspace":"example-project","path":"README.md","summary":"Key file: README.md (245 bytes)","raw_ref":"scanner:README.md","sensitivity":"low","source":"scanner"}
+{"id":"doc:go.mod","type":"doc_snippet","workspace":"example-project","path":"go.mod","summary":"Key file: go.mod (78 bytes)","raw_ref":"scanner:go.mod","sensitivity":"low","source":"scanner"}
+{"id":"doc:Makefile","type":"doc_snippet","workspace":"example-project","path":"Makefile","summary":"Key file: Makefile (156 bytes)","raw_ref":"scanner:Makefile","sensitivity":"low","source":"scanner"}
+{"id":"command:go build ./...:build","type":"command_result","workspace":"example-project","path":"Makefile","summary":"Build command: go build ./... (from Makefile)","raw_ref":"Makefile","sensitivity":"low","source":"scanner"}
+{"id":"command:go test ./...:test","type":"command_result","workspace":"example-project","path":"Makefile","summary":"Test command: go test ./... (from Makefile)","raw_ref":"Makefile","sensitivity":"low","source":"scanner"}
+{"id":"file_change:go.mod:M","type":"file_change","workspace":"example-project","path":"go.mod","summary":"modified: go.mod","raw_ref":"git status --porcelain","sensitivity":"low","source":"git"}

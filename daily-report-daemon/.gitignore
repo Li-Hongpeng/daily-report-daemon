@@ -1,0 +1,29 @@
+# Build output
+/daily-report-daemon
+/dist/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project runtime data (not committed; each user has their own)
+.daily-report-daemon/runs/
+.daily-report-daemon/reports/
+.daily-report-daemon/context/
+
+# Secrets
+.env
+.env.*
+*.pem
+*secret*
+*token*
+credentials*
+
+# Dependencies
+vendor/
