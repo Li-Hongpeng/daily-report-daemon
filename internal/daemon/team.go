@@ -133,10 +133,20 @@ func SendToDingTalk(webhookURL, title, content string) error {
 			Text:  fmt.Sprintf("## %s\n\n%s\n\n> 由 daily-report-daemon 自动发送", title, truncateDingTalk(content, 20000)),
 		},
 	}
-	// HTTP POST implementation uses standard net/http
-	_ = webhookURL
-	_ = msg
-	// Real HTTP POST to DingTalk webhook
+		payload, err := json.Marshal(msg)
+		if err != nil {
+			return fmt.Errorf("dingtalk marshal: %w", err)
+		}
+		client := &http.Client{Timeout: 10 * time.Second}
+		resp, err := client.Post(webhookURL, "application/json", bytes.NewReader(payload))
+		if err != nil {
+			return fmt.Errorf("dingtalk POST: %w", err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != 200 {
+			return fmt.Errorf("dingtalk returned status %d", resp.StatusCode)
+		}
+		return nil
 	// Uses net/http client to POST JSON to webhookURL
 	// Phase 3: wire this when HTTP client is available
 	_ = msg
