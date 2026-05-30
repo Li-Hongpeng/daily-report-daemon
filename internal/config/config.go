@@ -46,8 +46,15 @@ type ReportsConfig struct {
 
 // PublisherConfig holds upstream publish settings.
 type PublisherConfig struct {
-	Enabled        bool   `yaml:"enabled"`
-	PrimaryChannel string `yaml:"primary_channel"`
+	Enabled        bool          `yaml:"enabled"`
+	PrimaryChannel string        `yaml:"primary_channel"`
+	DingTalk       DingTalkConfig `yaml:"dingtalk,omitempty"`
+}
+
+// DingTalkConfig holds DingTalk webhook settings.
+type DingTalkConfig struct {
+	WebhookURL string `yaml:"webhook_url"`
+	AutoSend   bool   `yaml:"auto_send"`
 }
 
 // defaultLLMConfig detects DeepSeek vs OpenAI based on available env vars.

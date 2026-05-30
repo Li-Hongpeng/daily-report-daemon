@@ -2,7 +2,9 @@ package app
 
 import (
 	"encoding/json"
+	"bytes"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -287,7 +289,62 @@ func (a *App) Run() (*RunResult, error) {
 		result.Contexts = ctxResult.Contexts
 	}
 
+	// Publish to configured channels (DingTalk, email)
+	a.publishReports(result)
+
 	return result, nil
+}
+
+func (a *App) publishReports(result *RunResult) {
+	cfgPath := filepath.Join(a.Workspace, ".daily-report-daemon", "config.yaml")
+	cfg, err := config.Load(cfgPath)
+	if err != nil || cfg.Publisher.Enabled == false {
+		return
+	}
+
+	for _, rpt := range result.Reports {
+		data, err := os.ReadFile(rpt)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[publisher] read report error: %v\n", err)
+			continue
+		}
+		content := string(data)
+
+		// DingTalk
+		if cfg.Publisher.PrimaryChannel == "dingtalk" && cfg.Publisher.DingTalk.WebhookURL != "" {
+			fmt.Fprintf(os.Stderr, "[publisher] sending to DingTalk...\n")
+			if err := a.sendDingTalk(cfg.Publisher.DingTalk.WebhookURL, "日报", content); err != nil {
+				fmt.Fprintf(os.Stderr, "[publisher] DingTalk error: %v\n", err)
+			} else {
+				fmt.Fprintf(os.Stderr, "[publisher] DingTalk sent ✓\n")
+			}
+		}
+	}
+}
+
+func (a *App) sendDingTalk(webhookURL, title, content string) error {
+	// Trim content for DingTalk (max 20000 chars)
+	if len(content) > 20000 {
+		content = content[:20000] + "\n\n... [内容过长已截断]"
+	}
+
+	msg := map[string]interface{}{
+		"msgtype": "markdown",
+		"markdown": map[string]string{
+			"title": title,
+			"text":  fmt.Sprintf("## %s\n\n%s\n\n> 由 daily-report-daemon 自动发送", title, content),
+		},
+	}
+	payload, _ := json.Marshal(msg)
+	resp, err := http.Post(webhookURL, "application/json", bytes.NewReader(payload))
+	if err != nil {
+		return fmt.Errorf("POST: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return fmt.Errorf("status %d", resp.StatusCode)
+	}
+	return nil
 }
 
 // Summary returns a human-readable run summary.
