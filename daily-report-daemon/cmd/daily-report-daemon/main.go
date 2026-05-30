@@ -9,6 +9,7 @@ import (
 
 	"github.com/daily-report-daemon/internal/app"
 	"github.com/daily-report-daemon/internal/config"
+	"github.com/daily-report-daemon/internal/daemon"
 )
 
 var version = "0.1.0-dev"
@@ -40,6 +41,7 @@ agent context files (AGENTS.generated.md) for coding agents.`,
 	rootCmd.AddCommand(newReportCmd(&workspacePath, &dryRun, &noLLM))
 	rootCmd.AddCommand(newAgentContextCmd(&workspacePath, &dryRun, &noLLM))
 	rootCmd.AddCommand(newRunCmd(&workspacePath, &dryRun, &noLLM))
+	rootCmd.AddCommand(newDaemonCmd(&workspacePath))
 
 	rootCmd.SetVersionTemplate("daily-report-daemon {{.Version}}\n")
 
@@ -81,9 +83,14 @@ with a config.yaml and the required subdirectories (runs, reports, context).`,
 			}
 
 			key := os.Getenv("OPENAI_API_KEY")
-			if key == "" {
-				fmt.Fprintln(os.Stderr, "⚠  OPENAI_API_KEY is not set. Set it before generating reports.")
+			dsKey := os.Getenv("DEEPSEEK_API_KEY")
+			if key == "" && dsKey == "" {
+				fmt.Fprintln(os.Stderr, "⚠  No API key found. Set one before generating reports:")
 				fmt.Fprintln(os.Stderr, "   export OPENAI_API_KEY=sk-...")
+				fmt.Fprintln(os.Stderr, "   export DEEPSEEK_API_KEY=sk-...")
+			}
+			if dsKey != "" {
+				fmt.Fprintln(os.Stderr, "✓  DEEPSEEK_API_KEY detected — using DeepSeek API (deepseek-chat)")
 			}
 
 			cfg := config.DefaultConfig(abs)
@@ -184,5 +191,54 @@ or --no-llm to skip LLM and report generation entirely.`,
 			return err
 		},
 	}
+	return cmd
+}
+
+func newDaemonCmd(wp *string) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "daemon",
+		Short: "Manage the background service (start/stop/status/restart)",
+	}
+
+	var outputDir string
+	cmd.PersistentFlags().StringVar(&outputDir, "output-dir", ".daily-report-daemon", "daemon data directory")
+
+	cmd.AddCommand(&cobra.Command{
+		Use:   "start",
+		Short: "Start the daemon",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			abs, _ := resolveWorkspace(*wp)
+			d := daemon.New([]string{abs}, filepath.Join(abs, outputDir))
+			return d.Start()
+		},
+	})
+	cmd.AddCommand(&cobra.Command{
+		Use:   "stop",
+		Short: "Stop the daemon",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			abs, _ := resolveWorkspace(*wp)
+			d := daemon.New([]string{abs}, filepath.Join(abs, outputDir))
+			return d.Stop()
+		},
+	})
+	cmd.AddCommand(&cobra.Command{
+		Use:   "status",
+		Short: "Show daemon status",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			abs, _ := resolveWorkspace(*wp)
+			d := daemon.New([]string{abs}, filepath.Join(abs, outputDir))
+			fmt.Println(d.Status())
+			return nil
+		},
+	})
+	cmd.AddCommand(&cobra.Command{
+		Use:   "restart",
+		Short: "Restart the daemon",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			abs, _ := resolveWorkspace(*wp)
+			d := daemon.New([]string{abs}, filepath.Join(abs, outputDir))
+			return d.Restart()
+		},
+	})
 	return cmd
 }

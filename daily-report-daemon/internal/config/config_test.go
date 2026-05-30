@@ -47,6 +47,30 @@ func TestSaveAndLoad(t *testing.T) {
 	}
 }
 
+func TestDefaultLLMConfigDeepSeek(t *testing.T) {
+	os.Setenv("DEEPSEEK_API_KEY", "sk-test-ds")
+	defer os.Unsetenv("DEEPSEEK_API_KEY")
+	cfg := defaultLLMConfig()
+	if cfg.BaseURL != "https://api.deepseek.com" {
+		t.Errorf("expected DeepSeek base URL, got %s", cfg.BaseURL)
+	}
+	if cfg.Model != "deepseek-chat" {
+		t.Errorf("expected deepseek-chat, got %s", cfg.Model)
+	}
+	if cfg.APIKeyEnv != "DEEPSEEK_API_KEY" {
+		t.Errorf("expected DEEPSEEK_API_KEY, got %s", cfg.APIKeyEnv)
+	}
+}
+
+func TestDefaultLLMConfigOpenAI(t *testing.T) {
+	os.Unsetenv("DEEPSEEK_API_KEY")
+	os.Unsetenv("OPENAI_API_KEY")
+	cfg := defaultLLMConfig()
+	if cfg.BaseURL != "https://api.openai.com/v1" {
+		t.Errorf("expected OpenAI base URL, got %s", cfg.BaseURL)
+	}
+}
+
 func TestCheckAPIKeyMissing(t *testing.T) {
 	cfg := DefaultConfig("/tmp/test")
 	// Ensure env var is unset

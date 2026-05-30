@@ -276,14 +276,15 @@ func (a *App) Run() (*RunResult, error) {
 			result.Reports = reportResult.Reports
 			result.Errors = append(result.Errors, reportResult.Errors...)
 		}
+	}
 
-		ctxResult, err := a.AgentContext()
-		if err != nil {
-			result.Errors = append(result.Errors, err.Error())
-			fmt.Fprintf(os.Stderr, "agent-context error: %v\n", err)
-		} else {
-			result.Contexts = ctxResult.Contexts
-		}
+	// Agent context doesn't need LLM, always generate it
+	ctxResult, err := a.AgentContext()
+	if err != nil {
+		result.Errors = append(result.Errors, err.Error())
+		fmt.Fprintf(os.Stderr, "agent-context error: %v\n", err)
+	} else {
+		result.Contexts = ctxResult.Contexts
 	}
 
 	return result, nil

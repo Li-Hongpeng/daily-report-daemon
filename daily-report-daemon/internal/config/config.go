@@ -10,24 +10,24 @@ import (
 
 // Config is the top-level configuration for daily-report-daemon.
 type Config struct {
-	Version   string              `yaml:"version"`
-	Language  string              `yaml:"language"`
-	Workspace WorkspaceConfig     `yaml:"workspace"`  // single workspace in Phase 0
-	LLM       LLMConfig           `yaml:"llm"`
-	Reports   ReportsConfig       `yaml:"reports"`
-	Publisher PublisherConfig     `yaml:"publisher"`
+	Version   string          `yaml:"version"`
+	Language  string          `yaml:"language"`
+	Workspace WorkspaceConfig `yaml:"workspace"` // single workspace in Phase 0
+	LLM       LLMConfig       `yaml:"llm"`
+	Reports   ReportsConfig   `yaml:"reports"`
+	Publisher PublisherConfig `yaml:"publisher"`
 }
 
 // WorkspaceConfig defines a single workspace in Phase 0.
 type WorkspaceConfig struct {
-	Name        string   `yaml:"name"`
-	Path        string   `yaml:"path"`
-	Type        string   `yaml:"type"` // "git_repo" in Phase 0
-	Include     []string `yaml:"include"`
-	Exclude     []string `yaml:"exclude"`
-	MaxFileBytes int64   `yaml:"max_file_bytes"`
-	GitEnabled  bool     `yaml:"git_enabled"`
-	DocsEnabled bool     `yaml:"docs_enabled"`
+	Name         string   `yaml:"name"`
+	Path         string   `yaml:"path"`
+	Type         string   `yaml:"type"` // "git_repo" in Phase 0
+	Include      []string `yaml:"include"`
+	Exclude      []string `yaml:"exclude"`
+	MaxFileBytes int64    `yaml:"max_file_bytes"`
+	GitEnabled   bool     `yaml:"git_enabled"`
+	DocsEnabled  bool     `yaml:"docs_enabled"`
 }
 
 // LLMConfig holds model provider settings.
@@ -50,7 +50,26 @@ type PublisherConfig struct {
 	PrimaryChannel string `yaml:"primary_channel"`
 }
 
+// defaultLLMConfig detects DeepSeek vs OpenAI based on available env vars.
+func defaultLLMConfig() LLMConfig {
+	if os.Getenv("DEEPSEEK_API_KEY") != "" {
+		return LLMConfig{
+			Provider:  "openai-compatible",
+			BaseURL:   "https://api.deepseek.com",
+			Model:     "deepseek-chat",
+			APIKeyEnv: "DEEPSEEK_API_KEY",
+		}
+	}
+	return LLMConfig{
+		Provider:  "openai-compatible",
+		BaseURL:   "https://api.openai.com/v1",
+		Model:     "gpt-4.1-mini",
+		APIKeyEnv: "OPENAI_API_KEY",
+	}
+}
+
 // DefaultConfig returns a Config with sensible defaults for the given workspace path.
+// Auto-detects DeepSeek vs OpenAI based on available environment variables.
 func DefaultConfig(workspacePath string) Config {
 	return Config{
 		Version:  "1",
@@ -61,16 +80,11 @@ func DefaultConfig(workspacePath string) Config {
 			Type:         "git_repo",
 			Include:      []string{"**/*"},
 			Exclude:      defaultExcludes(),
-			MaxFileBytes: 262144, // 256KB
+			MaxFileBytes: 262144,
 			GitEnabled:   true,
 			DocsEnabled:  true,
 		},
-		LLM: LLMConfig{
-			Provider:  "openai-compatible",
-			BaseURL:   "https://api.openai.com/v1",
-			Model:     "gpt-4.1-mini",
-			APIKeyEnv: "OPENAI_API_KEY",
-		},
+		LLM: defaultLLMConfig(),
 		Reports: ReportsConfig{
 			OutputDir:     ".daily-report-daemon/reports",
 			EvidenceLevel: "normal",

@@ -44,27 +44,77 @@ func NewClient(baseURL, model, apiKeyEnv string, dryRun bool, outputDir string) 
 
 // Message is a chat message.
 type Message struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role       string      `json:"role"`
+	Content    string      `json:"content,omitempty"`
+	ToolCalls  []ToolCall  `json:"tool_calls,omitempty"`
+	ToolCallID string      `json:"tool_call_id,omitempty"`
+}
+
+// ToolCall represents a function call from the model.
+type ToolCall struct {
+	ID       string       `json:"id"`
+	Type     string       `json:"type"`
+	Function FunctionCall `json:"function"`
+}
+
+// FunctionCall is the function name and arguments.
+type FunctionCall struct {
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"`
+}
+
+// ToolDef is a tool definition sent to the model.
+type ToolDef struct {
+	Type     string         `json:"type"`
+	Function ToolFunction   `json:"function"`
+}
+
+// ToolFunction describes a function the model can call.
+type ToolFunction struct {
+	Name        string       `json:"name"`
+	Description string       `json:"description"`
+	Parameters  ToolParams   `json:"parameters"`
+}
+
+// ToolParams describes function parameters in JSON Schema format.
+type ToolParams struct {
+	Type       string              `json:"type"`
+	Properties map[string]PropDef  `json:"properties"`
+	Required   []string            `json:"required,omitempty"`
+}
+
+// PropDef defines a single parameter property.
+type PropDef struct {
+	Type        string `json:"type"`
+	Description string `json:"description"`
 }
 
 // ChatRequest is the body for /v1/chat/completions.
 type ChatRequest struct {
-	Model       string    `json:"model"`
-	Messages    []Message `json:"messages"`
-	Temperature float64   `json:"temperature,omitempty"`
-	MaxTokens   int       `json:"max_tokens,omitempty"`
+	Model       string     `json:"model"`
+	Messages    []Message  `json:"messages"`
+	Temperature float64    `json:"temperature,omitempty"`
+	MaxTokens   int        `json:"max_tokens,omitempty"`
+	Tools       []ToolDef  `json:"tools,omitempty"`
+	ToolChoice  string     `json:"tool_choice,omitempty"` // "auto", "none", or specific tool
+}
+
+// Choice is a single completion choice.
+type Choice struct {
+	Message ChoiceMessage `json:"message"`
+}
+
+// ChoiceMessage is the message within a choice.
+type ChoiceMessage struct {
+	Role      string     `json:"role"`
+	Content   string     `json:"content"`
+	ToolCalls []ToolCall `json:"tool_calls,omitempty"`
 }
 
 // ChatResponse is the response from /v1/chat/completions.
 type ChatResponse struct {
-	ID      string `json:"id"`
-	Choices []struct {
-		Message struct {
-			Role    string `json:"role"`
-			Content string `json:"content"`
-		} `json:"message"`
-	} `json:"choices"`
+	ID      string   `json:"id"`
+	Choices []Choice `json:"choices"`
 	Usage *struct {
 		PromptTokens     int `json:"prompt_tokens"`
 		CompletionTokens int `json:"completion_tokens"`
@@ -104,7 +154,7 @@ func (c *Client) Chat(systemPrompt, userPrompt, label string) (*CallResult, erro
 	}
 
 	// Estimate input tokens (rough: 1 token ≈ 4 chars)
-	inputTokens := (len(systemPrompt) + len(userPrompt)) / 4
+	inputTokens := (len(systemPrompt) + len(userPrompt)) / 2 // token/2 for CJK text
 
 	// Save model input
 	if c.OutputDir != "" {
@@ -172,6 +222,64 @@ func (c *Client) Chat(systemPrompt, userPrompt, label string) (*CallResult, erro
 			InputTokens:  inputTokens,
 			OutputTokens: outputTokens,
 		}, nil
+	}
+
+	return nil, fmt.Errorf("all %d retries exhausted: %w", c.MaxRetries+1, lastErr)
+}
+
+// ChatWithTools sends a request with tool definitions and returns the response
+// which may contain tool_calls instead of content.
+func (c *Client) ChatWithTools(systemPrompt, userPrompt string, tools []ToolDef, label string) (*ChatResponse, error) {
+	req := ChatRequest{
+		Model: c.Model,
+		Messages: []Message{
+			{Role: "system", Content: systemPrompt},
+			{Role: "user", Content: userPrompt},
+		},
+		Temperature: 0.3,
+		MaxTokens:   4096,
+		Tools:       tools,
+		ToolChoice:  "auto",
+	}
+
+	if c.OutputDir != "" {
+		c.saveInput(req, label)
+	}
+
+	if c.DryRun {
+		return &ChatResponse{}, nil
+	}
+
+	body, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("marshal request: %w", err)
+	}
+
+	url := c.BaseURL + "/chat/completions"
+
+	var lastErr error
+	for attempt := 0; attempt <= c.MaxRetries; attempt++ {
+		if attempt > 0 {
+			time.Sleep(time.Duration(attempt) * 2 * time.Second)
+		}
+
+		resp, err := c.doRequest(url, body)
+		if err != nil {
+			lastErr = err
+			if isRetryable(err) {
+				continue
+			}
+			return nil, err
+		}
+		if resp == nil {
+			continue
+		}
+
+		if c.OutputDir != "" {
+			c.saveOutput(resp, label)
+		}
+
+		return resp, nil
 	}
 
 	return nil, fmt.Errorf("all %d retries exhausted: %w", c.MaxRetries+1, lastErr)

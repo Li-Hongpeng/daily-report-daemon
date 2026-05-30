@@ -165,10 +165,34 @@ func SaveReport(content string, outputDir, date string) (string, error) {
 	return filename, nil
 }
 
-// BuildEvidenceIndex creates a lookup map from evidence item summaries (for report indexing).
+// BuildEvidenceIndex creates a lookup map from evidence items.
+// Accepts evidence items as []byte (JSONL) and returns id→summary mapping.
 func BuildEvidenceIndex(items interface{}) map[string]string {
-	// In Phase 0, we use a simplified approach: the LLM response carries evidence IDs,
-	// and the rendered report references them. The index in the report is built from IDs
-	// the LLM returns. For now, return an empty map — the LLM will populate evidence_ids.
-	return make(map[string]string)
+	idx := make(map[string]string)
+	data, ok := items.([]byte)
+	if !ok {
+		return idx
+	}
+	lines := strings.Split(string(data), "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" || line[0] != '{' {
+			continue
+		}
+		// Extract id and summary fields
+		idStart := strings.Index(line, `"id":"`)
+		sumStart := strings.Index(line, `"summary":"`)
+		if idStart < 0 || sumStart < 0 {
+			continue
+		}
+		idEnd := strings.Index(line[idStart+6:], `"`)
+		sumEnd := strings.Index(line[sumStart+12:], `"`)
+		if idEnd < 0 || sumEnd < 0 {
+			continue
+		}
+		id := line[idStart+6 : idStart+6+idEnd]
+		summary := line[sumStart+12 : sumStart+12+sumEnd]
+		idx[id] = summary
+	}
+	return idx
 }

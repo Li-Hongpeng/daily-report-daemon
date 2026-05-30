@@ -98,7 +98,7 @@ func (a *Analyzer) Collect() (*Activity, error) {
 	act.Status = a.collectStatus()
 
 	// Diffs (staged and unstaged)
-	act.Diffs = a.collectDiffs()
+	act.Diffs = a.collectDiffs(act.Status)
 
 	return act, nil
 }
@@ -130,7 +130,7 @@ func (a *Analyzer) collectRemotes() []Remote {
 }
 
 func (a *Analyzer) collectCommits() []Commit {
-	out := a.runner.RunOK("log", "--since=today 00:00", "--pretty=format:%H%x09%an%x09%ad%x09%s", "--date=iso")
+	out := a.runner.RunOK("log", "--since=midnight --date=local", "--pretty=format:%H%x09%an%x09%ad%x09%s", "--date=iso")
 	if out == "" {
 		return nil
 	}
@@ -181,18 +181,18 @@ func (a *Analyzer) collectStatus() []StatusEntry {
 	return entries
 }
 
-func (a *Analyzer) collectDiffs() []Diff {
+func (a *Analyzer) collectDiffs(status []StatusEntry) []Diff {
 	var diffs []Diff
 	diffs = append(diffs, a.collectDiffScope("staged", "--cached")...)
 	diffs = append(diffs, a.collectDiffScope("unstaged", "")...)
-	// Untracked files: read whole file content as "added" patch
-	diffs = append(diffs, a.collectUntrackedDiffs()...)
+	// Untracked files: use status from Collect() (no re-fetch)
+	diffs = append(diffs, a.buildUntrackedDiffs(status)...)
 	return diffs
 }
 
-func (a *Analyzer) collectUntrackedDiffs() []Diff {
+func (a *Analyzer) buildUntrackedDiffs(status []StatusEntry) []Diff {
 	var diffs []Diff
-	for _, se := range a.collectStatus() {
+	for _, se := range status {
 		if se.XY != "??" {
 			continue
 		}
@@ -360,4 +360,60 @@ func SaveActivity(act *Activity, path string) error {
 		return fmt.Errorf("marshal activity: %w", err)
 	}
 	return os.WriteFile(path, data, 0644)
+}
+
+// StashEntry represents a git stash item.
+type StashEntry struct {
+	Index   int    `json:"index"`
+	Branch  string `json:"branch"`
+	Message string `json:"message"`
+	Patch   string `json:"patch,omitempty"`
+}
+
+// CollectStashes returns the list of git stash entries with patches.
+func (a *Analyzer) CollectStashes() []StashEntry {
+	out := a.runner.RunOK("stash", "list")
+	if out == "" {
+		return nil
+	}
+
+	var stashes []StashEntry
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	for i, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		// Format: stash@{0}: On branch: message
+		entry := StashEntry{Index: i}
+		if idx := strings.Index(line, ": "); idx > 0 {
+			rest := line[idx+2:]
+			if strings.HasPrefix(rest, "On ") {
+				parts := strings.SplitN(rest, ": ", 2)
+				if len(parts) >= 1 {
+					entry.Branch = strings.TrimPrefix(parts[0], "On ")
+				}
+				if len(parts) >= 2 {
+					entry.Message = parts[1]
+				}
+			} else {
+				entry.Message = rest
+			}
+		}
+
+		// Get patch
+		patch := a.runner.RunOK("stash", "show", "-p", fmt.Sprintf("stash@{%d}", i))
+		entry.Patch = truncateStashPatch(patch)
+
+		stashes = append(stashes, entry)
+	}
+
+	return stashes
+}
+
+func truncateStashPatch(patch string) string {
+	if len(patch) > MaxDiffChars {
+		return patch[:MaxDiffChars] + fmt.Sprintf("\n... [truncated at %d chars]", MaxDiffChars)
+	}
+	return patch
 }

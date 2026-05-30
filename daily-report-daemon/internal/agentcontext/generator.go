@@ -257,7 +257,8 @@ func filterByDate(items []evidence.Item, date time.Time) []evidence.Item {
 	dateStr := date.Format("2006-01-02")
 	var result []evidence.Item
 	for _, item := range items {
-		if strings.Contains(item.Summary, dateStr) || item.Source == "git" {
+		// Only include items whose summary contains today's date
+		if strings.Contains(item.Summary, dateStr) {
 			result = append(result, item)
 		}
 	}

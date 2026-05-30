@@ -10,6 +10,7 @@ import (
 	"testing"
 )
 
+
 func TestNewClientMissingKey(t *testing.T) {
 	os.Unsetenv("OPENAI_API_KEY")
 	_, err := NewClient("https://api.openai.com/v1", "gpt-4", "OPENAI_API_KEY", false, "")
@@ -50,7 +51,6 @@ func TestDryRun(t *testing.T) {
 		t.Error("expected dry run result")
 	}
 
-	// Verify input file was saved
 	inputPath := filepath.Join(dir, "model-io", "test-dryrun-input.json")
 	if _, err := os.Stat(inputPath); os.IsNotExist(err) {
 		t.Errorf("expected model input file at %s", inputPath)
@@ -67,16 +67,8 @@ func TestMockServerSuccess(t *testing.T) {
 		}
 		resp := ChatResponse{
 			ID: "chat-123",
-			Choices: []struct {
-				Message struct {
-					Role    string `json:"role"`
-					Content string `json:"content"`
-				} `json:"message"`
-			}{
-				{Message: struct {
-					Role    string `json:"role"`
-					Content string `json:"content"`
-				}{Role: "assistant", Content: `{"date":"2026-05-29","summary":["test"]}`}},
+			Choices: []Choice{
+				{Message: ChoiceMessage{Role: "assistant", Content: `{"date":"2026-05-30","summary":["test"]}`}},
 			},
 		}
 		json.NewEncoder(w).Encode(resp)
@@ -116,7 +108,7 @@ func TestMockServer4xx(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	c.MaxRetries = 0 // don't retry in test
+	c.MaxRetries = 0
 
 	_, err = c.Chat("system", "user", "test-4xx")
 	if err == nil {
@@ -137,16 +129,8 @@ func TestMockServer5xxRetry(t *testing.T) {
 		}
 		resp := ChatResponse{
 			ID: "chat-ok",
-			Choices: []struct {
-				Message struct {
-					Role    string `json:"role"`
-					Content string `json:"content"`
-				} `json:"message"`
-			}{
-				{Message: struct {
-					Role    string `json:"role"`
-					Content string `json:"content"`
-				}{Role: "assistant", Content: "ok after retry"}},
+			Choices: []Choice{
+				{Message: ChoiceMessage{Role: "assistant", Content: "ok after retry"}},
 			},
 		}
 		json.NewEncoder(w).Encode(resp)
@@ -174,18 +158,18 @@ func TestMockServer5xxRetry(t *testing.T) {
 }
 
 func TestParseReportJSON(t *testing.T) {
-	raw := `{"date":"2026-05-29","summary":["Worked on feature X"],"completed":[],"changes":[],"risks":[],"blockers":[],"next_steps":[]}`
+	raw := `{"date":"2026-05-30","summary":["Worked on feature X"],"completed":[],"changes":[],"risks":[],"blockers":[],"next_steps":[]}`
 	report, err := ParseReportJSON(raw)
 	if err != nil {
 		t.Fatalf("ParseReportJSON failed: %v", err)
 	}
-	if report.Date != "2026-05-29" {
-		t.Errorf("expected date 2026-05-29, got %s", report.Date)
+	if report.Date != "2026-05-30" {
+		t.Errorf("expected date 2026-05-30, got %s", report.Date)
 	}
 }
 
 func TestParseReportJSONWithFences(t *testing.T) {
-	raw := "```json\n{\"date\":\"2026-05-29\",\"summary\":[\"test\"],\"completed\":[],\"changes\":[],\"risks\":[],\"blockers\":[],\"next_steps\":[]}\n```"
+	raw := "```json\n{\"date\":\"2026-05-30\",\"summary\":[\"test\"],\"completed\":[],\"changes\":[],\"risks\":[],\"blockers\":[],\"next_steps\":[]}\n```"
 	report, err := ParseReportJSON(raw)
 	if err != nil {
 		t.Fatalf("ParseReportJSON failed: %v", err)
@@ -206,9 +190,8 @@ func TestParseReportJSONMalformed(t *testing.T) {
 }
 
 func TestValidateReportJSON(t *testing.T) {
-	// Valid report
 	report := &DailyReportJSON{
-		Date:    "2026-05-29",
+		Date:    "2026-05-30",
 		Summary: []string{"did stuff"},
 		Completed: []WorkItem{
 			{Description: "fixed bug", EvidenceIDs: []string{"diff:main.go:abc"}, Inferred: false},
@@ -219,9 +202,8 @@ func TestValidateReportJSON(t *testing.T) {
 		t.Errorf("expected 0 issues, got: %v", issues)
 	}
 
-	// Report with no evidence and not inferred
 	report2 := &DailyReportJSON{
-		Date:    "2026-05-29",
+		Date:    "2026-05-30",
 		Summary: []string{"did stuff"},
 		Completed: []WorkItem{
 			{Description: "fixed bug", EvidenceIDs: nil, Inferred: false},
@@ -232,9 +214,8 @@ func TestValidateReportJSON(t *testing.T) {
 		t.Error("expected issues for item with no evidence")
 	}
 
-	// Report with inferred items (not an error)
 	report3 := &DailyReportJSON{
-		Date:    "2026-05-29",
+		Date:    "2026-05-30",
 		Summary: []string{"did stuff"},
 		Completed: []WorkItem{
 			{Description: "probably fixed bug", EvidenceIDs: nil, Inferred: true},
@@ -253,7 +234,7 @@ func TestDailyReportPrompts(t *testing.T) {
 	}
 
 	user := DailyReportUserPrompt(`[{"id":"test"}]`)
-	if !strings.Contains(user, "2026-05-29") {
+	if !strings.Contains(user, "2026-05-30") {
 		t.Error("expected date in user prompt")
 	}
 	if !strings.Contains(user, `"id":"test"`) {
