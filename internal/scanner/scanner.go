@@ -11,29 +11,29 @@ import (
 
 // ProjectMetadata captures the structure and key files of a project.
 type ProjectMetadata struct {
-	Root           string          `json:"root"`
-	Structure      []DirEntry      `json:"structure"`
-	KeyFiles       []KeyFile       `json:"key_files"`
-	Languages      []LangStat      `json:"languages"`
-	BuildCommands  []CommandHint   `json:"build_commands"`
-	TestCommands   []CommandHint   `json:"test_commands"`
-	TotalFiles     int             `json:"total_files"`
-	TotalTextFiles int             `json:"total_text_files"`
+	Root           string        `json:"root"`
+	Structure      []DirEntry    `json:"structure"`
+	KeyFiles       []KeyFile     `json:"key_files"`
+	Languages      []LangStat    `json:"languages"`
+	BuildCommands  []CommandHint `json:"build_commands"`
+	TestCommands   []CommandHint `json:"test_commands"`
+	TotalFiles     int           `json:"total_files"`
+	TotalTextFiles int           `json:"total_text_files"`
 }
 
 // DirEntry is a single file or directory in the structure listing.
 type DirEntry struct {
-	Name  string `json:"name"`
-	Type  string `json:"type"` // "file" or "dir"
-	Size  int64  `json:"size,omitempty"`
+	Name string `json:"name"`
+	Type string `json:"type"` // "file" or "dir"
+	Size int64  `json:"size,omitempty"`
 }
 
 // KeyFile represents a recognized key file with its (truncated) content.
 type KeyFile struct {
-	Path     string `json:"path"`
-	Name     string `json:"name"`
-	Content  string `json:"content"`
-	Truncated bool  `json:"truncated,omitempty"`
+	Path      string `json:"path"`
+	Name      string `json:"name"`
+	Content   string `json:"content"`
+	Truncated bool   `json:"truncated,omitempty"`
 }
 
 // LangStat counts files by extension.
@@ -347,4 +347,17 @@ func SaveMetadata(meta *ProjectMetadata, path string) error {
 		return fmt.Errorf("marshal metadata: %w", err)
 	}
 	return os.WriteFile(path, data, 0644)
+}
+
+// LoadMetadata reads ProjectMetadata from a previously saved JSON file.
+func LoadMetadata(path string) (*ProjectMetadata, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read metadata: %w", err)
+	}
+	var meta ProjectMetadata
+	if err := json.Unmarshal(data, &meta); err != nil {
+		return nil, fmt.Errorf("parse metadata: %w", err)
+	}
+	return &meta, nil
 }

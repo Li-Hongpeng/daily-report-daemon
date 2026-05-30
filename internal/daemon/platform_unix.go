@@ -23,3 +23,12 @@ func platformInit(d *Daemon) {
 func platformCleanup(d *Daemon) {
 	os.Remove(d.PIDFile)
 }
+
+func platformStopPID(pid int) error {
+	return syscall.Kill(pid, syscall.SIGTERM)
+}
+
+func platformProcessExists(pid int) bool {
+	err := syscall.Kill(pid, 0)
+	return err == nil || err == syscall.EPERM
+}

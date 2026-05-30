@@ -14,13 +14,13 @@ const MaxDiffChars = 8000
 
 // Activity represents the full set of git activity collected for one scan.
 type Activity struct {
-	RepoRoot string  `json:"repo_root"`
-	Branch   string  `json:"branch"`
-	Head     string  `json:"head"`
-	Remotes  []Remote `json:"remotes"`
-	Commits  []Commit `json:"commits"`
+	RepoRoot string        `json:"repo_root"`
+	Branch   string        `json:"branch"`
+	Head     string        `json:"head"`
+	Remotes  []Remote      `json:"remotes"`
+	Commits  []Commit      `json:"commits"`
 	Status   []StatusEntry `json:"status"`
-	Diffs    []Diff   `json:"diffs"`
+	Diffs    []Diff        `json:"diffs"`
 }
 
 // Remote holds a single git remote.
@@ -45,7 +45,7 @@ type StatusEntry struct {
 
 // Diff describes a single file's diff.
 type Diff struct {
-	Scope      string `json:"scope"`       // "staged", "unstaged"
+	Scope      string `json:"scope"` // "staged", "unstaged"
 	File       string `json:"file"`
 	ChangeType string `json:"change_type"` // "added", "modified", "deleted", "renamed"
 	Additions  int    `json:"additions"`
@@ -67,13 +67,47 @@ func NewAnalyzer(repoRoot string) *Analyzer {
 // FindRepoRoot discovers the git repository root for a given path.
 // Returns an empty string if the path is not inside a git repo.
 func FindRepoRoot(path string) (string, error) {
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return "", fmt.Errorf("resolve path: %w", err)
+	}
+
 	cmd := exec.Command("git", "rev-parse", "--show-toplevel")
-	cmd.Dir = path
+	cmd.Dir = absPath
 	out, err := cmd.Output()
 	if err != nil {
 		return "", fmt.Errorf("not a git repository (or git not installed): %w", err)
 	}
-	return strings.TrimSpace(string(out)), nil
+	return normalizeRepoRoot(absPath, strings.TrimSpace(string(out))), nil
+}
+
+func normalizeRepoRoot(inputPath, gitRoot string) string {
+	if inputPath == "" || gitRoot == "" {
+		return gitRoot
+	}
+
+	inputEval, inputErr := filepath.EvalSymlinks(inputPath)
+	rootEval, rootErr := filepath.EvalSymlinks(gitRoot)
+	if inputErr != nil || rootErr != nil {
+		return filepath.Clean(gitRoot)
+	}
+
+	rel, err := filepath.Rel(rootEval, inputEval)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return filepath.Clean(gitRoot)
+	}
+
+	root := filepath.Clean(inputPath)
+	if rel == "." {
+		return root
+	}
+	for _, part := range strings.Split(rel, string(filepath.Separator)) {
+		if part == "" || part == "." {
+			continue
+		}
+		root = filepath.Dir(root)
+	}
+	return root
 }
 
 // Collect gathers all git activity for today.

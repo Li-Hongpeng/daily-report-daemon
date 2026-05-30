@@ -13,13 +13,13 @@ import (
 type Type string
 
 const (
-	TypeCommit      Type = "commit"
-	TypeDiff        Type = "diff"
-	TypeFileChange  Type = "file_change"
+	TypeCommit       Type = "commit"
+	TypeDiff         Type = "diff"
+	TypeFileChange   Type = "file_change"
 	TypeFileMetadata Type = "file_metadata"
-	TypeDocSnippet  Type = "doc_snippet"
-	TypeTodo        Type = "todo"
-	TypeCommand     Type = "command_result"
+	TypeDocSnippet   Type = "doc_snippet"
+	TypeTodo         Type = "todo"
+	TypeCommand      Type = "command_result"
 )
 
 // Sensitivity level for an evidence item.
@@ -38,6 +38,7 @@ type Item struct {
 	Workspace   string      `json:"workspace"`
 	Path        string      `json:"path"`
 	Summary     string      `json:"summary"`
+	Content     string      `json:"content,omitempty"`
 	RawRef      string      `json:"raw_ref"`
 	Sensitivity Sensitivity `json:"sensitivity"`
 	Source      string      `json:"source"` // "git", "scanner"

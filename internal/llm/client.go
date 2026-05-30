@@ -26,7 +26,7 @@ type Client struct {
 // NewClient creates a Client from config values.
 func NewClient(baseURL, model, apiKeyEnv string, dryRun bool, outputDir string) (*Client, error) {
 	key := os.Getenv(apiKeyEnv)
-	if key == "" {
+	if key == "" && !dryRun {
 		return nil, fmt.Errorf("API key not set: environment variable %s is empty", apiKeyEnv)
 	}
 	return &Client{
@@ -44,10 +44,10 @@ func NewClient(baseURL, model, apiKeyEnv string, dryRun bool, outputDir string) 
 
 // Message is a chat message.
 type Message struct {
-	Role       string      `json:"role"`
-	Content    string      `json:"content,omitempty"`
-	ToolCalls  []ToolCall  `json:"tool_calls,omitempty"`
-	ToolCallID string      `json:"tool_call_id,omitempty"`
+	Role       string     `json:"role"`
+	Content    string     `json:"content,omitempty"`
+	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
+	ToolCallID string     `json:"tool_call_id,omitempty"`
 }
 
 // ToolCall represents a function call from the model.
@@ -65,22 +65,22 @@ type FunctionCall struct {
 
 // ToolDef is a tool definition sent to the model.
 type ToolDef struct {
-	Type     string         `json:"type"`
-	Function ToolFunction   `json:"function"`
+	Type     string       `json:"type"`
+	Function ToolFunction `json:"function"`
 }
 
 // ToolFunction describes a function the model can call.
 type ToolFunction struct {
-	Name        string       `json:"name"`
-	Description string       `json:"description"`
-	Parameters  ToolParams   `json:"parameters"`
+	Name        string     `json:"name"`
+	Description string     `json:"description"`
+	Parameters  ToolParams `json:"parameters"`
 }
 
 // ToolParams describes function parameters in JSON Schema format.
 type ToolParams struct {
-	Type       string              `json:"type"`
-	Properties map[string]PropDef  `json:"properties"`
-	Required   []string            `json:"required,omitempty"`
+	Type       string             `json:"type"`
+	Properties map[string]PropDef `json:"properties"`
+	Required   []string           `json:"required,omitempty"`
 }
 
 // PropDef defines a single parameter property.
@@ -91,12 +91,12 @@ type PropDef struct {
 
 // ChatRequest is the body for /v1/chat/completions.
 type ChatRequest struct {
-	Model       string     `json:"model"`
-	Messages    []Message  `json:"messages"`
-	Temperature float64    `json:"temperature,omitempty"`
-	MaxTokens   int        `json:"max_tokens,omitempty"`
-	Tools       []ToolDef  `json:"tools,omitempty"`
-	ToolChoice  string     `json:"tool_choice,omitempty"` // "auto", "none", or specific tool
+	Model       string    `json:"model"`
+	Messages    []Message `json:"messages"`
+	Temperature float64   `json:"temperature,omitempty"`
+	MaxTokens   int       `json:"max_tokens,omitempty"`
+	Tools       []ToolDef `json:"tools,omitempty"`
+	ToolChoice  string    `json:"tool_choice,omitempty"` // "auto", "none", or specific tool
 }
 
 // Choice is a single completion choice.
@@ -115,7 +115,7 @@ type ChoiceMessage struct {
 type ChatResponse struct {
 	ID      string   `json:"id"`
 	Choices []Choice `json:"choices"`
-	Usage *struct {
+	Usage   *struct {
 		PromptTokens     int `json:"prompt_tokens"`
 		CompletionTokens int `json:"completion_tokens"`
 		TotalTokens      int `json:"total_tokens"`

@@ -27,6 +27,19 @@ func platformCleanup(d *Daemon) {
 	os.Remove(d.PIDFile + ".lock")
 }
 
+func platformStopPID(pid int) error {
+	p, err := os.FindProcess(pid)
+	if err != nil {
+		return err
+	}
+	return p.Signal(os.Kill)
+}
+
+func platformProcessExists(pid int) bool {
+	_, err := os.FindProcess(pid)
+	return err == nil
+}
+
 // acquireLock creates an exclusive file lock.
 func acquireLock(path string) error {
 	// On Windows, file locking is done via kernel32 CreateFile/DeviceIoControl

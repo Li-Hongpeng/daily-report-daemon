@@ -1,8 +1,8 @@
 package app
 
 import (
-	"encoding/json"
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
@@ -25,9 +25,10 @@ type App struct {
 	Workspace string
 	DryRun    bool
 	NoLLM     bool
+	RunDir    string
 
 	// Internal state populated by Scan, consumed by Report/AgentContext in Run()
-	evItems    []evidence.Item
+	evItems     []evidence.Item
 	projectMeta *scanner.ProjectMetadata
 }
 
@@ -45,7 +46,7 @@ type RunResult struct {
 
 // Scan runs Git Analyzer + File Scanner + sanitization → evidence.
 func (a *App) Scan() (*RunResult, error) {
-	result := &RunResult{RunDir: a.runDir()}
+	result := &RunResult{RunDir: a.ensureRunDir()}
 
 	// 1. Init run dir
 	os.MkdirAll(result.RunDir, 0755)
@@ -66,7 +67,7 @@ func (a *App) Scan() (*RunResult, error) {
 
 	// Save git activity
 	gitPath := filepath.Join(result.RunDir, "git-activity.json")
-	if err := git.SaveActivity(act, gitPath); err != nil {
+	if err := git.SaveActivity(sanitizedGitActivity(act), gitPath); err != nil {
 		return result, fmt.Errorf("save git activity: %w", err)
 	}
 
@@ -111,26 +112,35 @@ func (a *App) Scan() (*RunResult, error) {
 
 // Report generates a daily report from previously scanned evidence.
 func (a *App) Report() (*RunResult, error) {
-	result := &RunResult{RunDir: a.runDir()}
+	result := &RunResult{RunDir: a.RunDir}
 
 	// Load evidence (prefer in-memory from Scan, fall back to disk)
 	var evBytes []byte
 	if len(a.evItems) > 0 {
+		result.RunDir = a.ensureRunDir()
 		data, err := marshalEvidence(a.evItems)
 		if err != nil {
 			return result, fmt.Errorf("marshal evidence: %w", err)
 		}
 		evBytes = data
 	} else {
-		evPath := filepath.Join(result.RunDir, "evidence.jsonl")
-		if _, err := os.Stat(evPath); os.IsNotExist(err) {
-			return result, fmt.Errorf("no evidence found; run 'scan' first")
+		runDir, err := a.runDirWith("evidence.jsonl")
+		if err != nil {
+			return result, err
 		}
+		a.RunDir = runDir
+		result.RunDir = runDir
+		evPath := filepath.Join(result.RunDir, "evidence.jsonl")
 		data, err := os.ReadFile(evPath)
 		if err != nil {
 			return result, fmt.Errorf("read evidence: %w", err)
 		}
 		evBytes = data
+	}
+
+	if a.NoLLM {
+		fmt.Fprintln(os.Stderr, "[no-llm] Skipping LLM call and report generation")
+		return result, nil
 	}
 
 	// Load config
@@ -148,10 +158,6 @@ func (a *App) Report() (*RunResult, error) {
 
 	if a.DryRun {
 		fmt.Fprintln(os.Stderr, "[dry-run] Skipping LLM call; model input saved to model-io/")
-	}
-	if a.NoLLM {
-		fmt.Fprintln(os.Stderr, "[no-llm] Skipping LLM call and report generation")
-		return result, nil
 	}
 
 	// Generate report via LLM
@@ -209,21 +215,24 @@ func (a *App) Report() (*RunResult, error) {
 
 // AgentContext generates AGENTS.generated.md from scanned data.
 func (a *App) AgentContext() (*RunResult, error) {
-	result := &RunResult{RunDir: a.runDir()}
+	result := &RunResult{RunDir: a.RunDir}
 
 	// Use in-memory evidence and metadata from Scan if available
 	var evItems []evidence.Item
 	var meta *scanner.ProjectMetadata
 	if len(a.evItems) > 0 && a.projectMeta != nil {
+		result.RunDir = a.ensureRunDir()
 		evItems = a.evItems
 		meta = a.projectMeta
 	} else {
 		// Fall back to disk
-		evPath := filepath.Join(result.RunDir, "evidence.jsonl")
-		if _, err := os.Stat(evPath); os.IsNotExist(err) {
-			return result, fmt.Errorf("no evidence found; run 'scan' first")
+		runDir, err := a.runDirWith("evidence.jsonl")
+		if err != nil {
+			return result, err
 		}
-		var err error
+		a.RunDir = runDir
+		result.RunDir = runDir
+		evPath := filepath.Join(result.RunDir, "evidence.jsonl")
 		evItems, err = loadEvidenceItems(evPath)
 		if err != nil {
 			return result, fmt.Errorf("load evidence: %w", err)
@@ -233,10 +242,14 @@ func (a *App) AgentContext() (*RunResult, error) {
 		if err != nil {
 			return result, fmt.Errorf("not a git repository: %w", err)
 		}
-		sc := scanner.NewScanner(repoRoot)
-		meta, err = sc.Scan()
+		metaPath := filepath.Join(result.RunDir, "project-metadata.json")
+		meta, err = scanner.LoadMetadata(metaPath)
 		if err != nil {
-			return result, fmt.Errorf("scan for context: %w", err)
+			sc := scanner.NewScanner(repoRoot)
+			meta, err = sc.Scan()
+			if err != nil {
+				return result, fmt.Errorf("scan for context: %w", err)
+			}
 		}
 	}
 
@@ -375,9 +388,91 @@ func (r *RunResult) Summary() string {
 	return b.String()
 }
 
-func (a *App) runDir() string {
+func (a *App) ensureRunDir() string {
+	if a.RunDir == "" {
+		a.RunDir = a.newRunDir()
+	}
+	return a.RunDir
+}
+
+func (a *App) newRunDir() string {
 	ts := time.Now().Format("2006-01-02-150405")
 	return filepath.Join(a.Workspace, ".daily-report-daemon", "runs", ts)
+}
+
+func (a *App) latestRunDirWith(filename string) (string, error) {
+	runsDir := filepath.Join(a.Workspace, ".daily-report-daemon", "runs")
+	entries, err := os.ReadDir(runsDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", fmt.Errorf("no evidence found; run 'scan' first")
+		}
+		return "", fmt.Errorf("read runs dir: %w", err)
+	}
+
+	var latest string
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		candidate := filepath.Join(runsDir, entry.Name())
+		if _, err := os.Stat(filepath.Join(candidate, filename)); err != nil {
+			continue
+		}
+		if latest == "" || entry.Name() > filepath.Base(latest) {
+			latest = candidate
+		}
+	}
+	if latest == "" {
+		return "", fmt.Errorf("no evidence found; run 'scan' first")
+	}
+	return latest, nil
+}
+
+func (a *App) runDirWith(filename string) (string, error) {
+	if a.RunDir != "" {
+		if _, err := os.Stat(filepath.Join(a.RunDir, filename)); err == nil {
+			return a.RunDir, nil
+		}
+	}
+	return a.latestRunDirWith(filename)
+}
+
+func sanitizedGitActivity(act *git.Activity) *git.Activity {
+	if act == nil {
+		return nil
+	}
+
+	san := sanitize.New()
+	clean := *act
+
+	clean.Remotes = append([]git.Remote(nil), act.Remotes...)
+	for i := range clean.Remotes {
+		clean.Remotes[i].URL = san.Redact("git remote", clean.Remotes[i].URL)
+	}
+
+	clean.Commits = append([]git.Commit(nil), act.Commits...)
+	for i := range clean.Commits {
+		clean.Commits[i].Subject = san.Redact(clean.Commits[i].Hash, clean.Commits[i].Subject)
+	}
+
+	clean.Status = append([]git.StatusEntry(nil), act.Status...)
+	for i := range clean.Status {
+		if san.CheckPath(clean.Status[i].Path) {
+			clean.Status[i].Path = "[redacted sensitive path]"
+		}
+	}
+
+	clean.Diffs = append([]git.Diff(nil), act.Diffs...)
+	for i := range clean.Diffs {
+		if san.CheckPath(clean.Diffs[i].File) {
+			clean.Diffs[i].Patch = "[redacted: sensitive path]"
+			continue
+		}
+		clean.Diffs[i].Patch = san.Redact(clean.Diffs[i].File, clean.Diffs[i].Patch)
+	}
+
+	return &clean
 }
 
 func (a *App) loadConfig() (*config.Config, error) {
@@ -406,10 +501,13 @@ func loadEvidenceItems(path string) ([]evidence.Item, error) {
 		return nil, err
 	}
 	var items []evidence.Item
-	dec := json.NewDecoder(strings.NewReader(string(data)))
-	for dec.More() {
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
 		var item evidence.Item
-		if err := dec.Decode(&item); err != nil {
+		if err := json.Unmarshal([]byte(line), &item); err != nil {
 			continue // skip malformed lines
 		}
 		items = append(items, item)

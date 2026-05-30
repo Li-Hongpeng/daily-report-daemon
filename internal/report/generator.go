@@ -1,6 +1,7 @@
 package report
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -176,23 +177,19 @@ func BuildEvidenceIndex(items interface{}) map[string]string {
 	lines := strings.Split(string(data), "\n")
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
-		if line == "" || line[0] != '{' {
+		if line == "" {
 			continue
 		}
-		// Extract id and summary fields
-		idStart := strings.Index(line, `"id":"`)
-		sumStart := strings.Index(line, `"summary":"`)
-		if idStart < 0 || sumStart < 0 {
+		var item struct {
+			ID      string `json:"id"`
+			Summary string `json:"summary"`
+		}
+		if err := json.Unmarshal([]byte(line), &item); err != nil {
 			continue
 		}
-		idEnd := strings.Index(line[idStart+6:], `"`)
-		sumEnd := strings.Index(line[sumStart+12:], `"`)
-		if idEnd < 0 || sumEnd < 0 {
-			continue
+		if item.ID != "" {
+			idx[item.ID] = item.Summary
 		}
-		id := line[idStart+6 : idStart+6+idEnd]
-		summary := line[sumStart+12 : sumStart+12+sumEnd]
-		idx[id] = summary
 	}
 	return idx
 }

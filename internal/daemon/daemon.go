@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -25,6 +27,8 @@ type Daemon struct {
 	mu         sync.Mutex
 	running    bool
 	stopCh     chan struct{}
+	stopOnce   sync.Once
+	wg         sync.WaitGroup
 	lastScan   map[string]time.Time
 	scanStates map[string]*ScanState // per-workspace incremental scan state
 }
@@ -51,6 +55,8 @@ func (d *Daemon) Start() error {
 		return fmt.Errorf("daemon already running")
 	}
 	d.running = true
+	d.stopCh = make(chan struct{})
+	d.stopOnce = sync.Once{}
 	d.mu.Unlock()
 
 	// Ensure output directory exists
@@ -67,6 +73,7 @@ func (d *Daemon) Start() error {
 	d.LoadState(d.DBPath)
 
 	fmt.Println("daemon started")
+	d.wg.Add(1)
 	go d.loop()
 	return nil
 }
@@ -115,13 +122,18 @@ func (d *Daemon) LoadState(dbPath string) {
 func (d *Daemon) Stop() error {
 	d.mu.Lock()
 	if !d.running {
+		pidFile := d.PIDFile
 		d.mu.Unlock()
-		return fmt.Errorf("daemon not running")
+		return d.stopExternalProcess(pidFile)
 	}
 	d.running = false
+	stopCh := d.stopCh
 	d.mu.Unlock()
 
-	close(d.stopCh)
+	d.stopOnce.Do(func() {
+		close(stopCh)
+	})
+	d.wg.Wait()
 	platformCleanup(d)
 	fmt.Println("daemon stopped")
 	return nil
@@ -134,7 +146,11 @@ func (d *Daemon) Status() string {
 	if d.running {
 		return "running"
 	}
-	if _, err := os.Stat(d.PIDFile); err == nil {
+	pid, err := readPIDFile(d.PIDFile)
+	if err == nil {
+		if platformProcessExists(pid) {
+			return fmt.Sprintf("running (pid %d)", pid)
+		}
 		return "stale (PID file exists but process may be dead)"
 	}
 	return "stopped"
@@ -154,7 +170,13 @@ func (d *Daemon) Restart() error {
 	return d.Start()
 }
 
+// Wait blocks until an in-process daemon loop exits.
+func (d *Daemon) Wait() {
+	d.wg.Wait()
+}
+
 func (d *Daemon) loop() {
+	defer d.wg.Done()
 	scanTicker := time.NewTicker(d.Interval)
 	defer scanTicker.Stop()
 
@@ -170,7 +192,6 @@ func (d *Daemon) loop() {
 	for {
 		select {
 		case <-d.stopCh:
-			platformCleanup(d)
 			return
 		case <-scanTicker.C:
 			d.runScan()
@@ -180,6 +201,37 @@ func (d *Daemon) loop() {
 			}
 		}
 	}
+}
+
+func (d *Daemon) stopExternalProcess(pidFile string) error {
+	pid, err := readPIDFile(pidFile)
+	if err != nil {
+		return fmt.Errorf("daemon not running")
+	}
+	if !platformProcessExists(pid) {
+		os.Remove(pidFile)
+		return fmt.Errorf("daemon not running")
+	}
+	if err := platformStopPID(pid); err != nil {
+		return err
+	}
+	return nil
+}
+
+func readPIDFile(path string) (int, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0, err
+	}
+	text := strings.TrimSpace(string(data))
+	if i := strings.IndexAny(text, "\r\n\t "); i >= 0 {
+		text = text[:i]
+	}
+	pid, err := strconv.Atoi(text)
+	if err != nil || pid <= 0 {
+		return 0, fmt.Errorf("invalid pid file: %s", path)
+	}
+	return pid, nil
 }
 
 func (d *Daemon) isReportTime() bool {
@@ -284,7 +336,13 @@ func (d *Daemon) runReport() {
 
 		// Run agent engine
 		ag := agent.NewAgent(ws, llmClient)
-		var evidenceData []byte; if scanResult.EvidencePath != "" { evidenceData, _ = os.ReadFile(scanResult.EvidencePath) }; if len(evidenceData) == 0 { evidenceData = []byte(fmt.Sprintf(`{"files":%d,"diffs":%d}`, scanResult.FilesScanned, scanResult.DiffFiles)) }
+		var evidenceData []byte
+		if scanResult.EvidencePath != "" {
+			evidenceData, _ = os.ReadFile(scanResult.EvidencePath)
+		}
+		if len(evidenceData) == 0 {
+			evidenceData = []byte(fmt.Sprintf(`{"files":%d,"diffs":%d}`, scanResult.FilesScanned, scanResult.DiffFiles))
+		}
 		_, err = ag.Run(nil, string(evidenceData))
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "[daemon] agent error for %s: %v\n", ws, err)

@@ -207,16 +207,26 @@ func newDaemonCmd(wp *string) *cobra.Command {
 		Use:   "start",
 		Short: "Start the daemon",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			abs, _ := resolveWorkspace(*wp)
+			abs, err := resolveWorkspace(*wp)
+			if err != nil {
+				return err
+			}
 			d := daemon.New([]string{abs}, filepath.Join(abs, outputDir))
-			return d.Start()
+			if err := d.Start(); err != nil {
+				return err
+			}
+			d.Wait()
+			return nil
 		},
 	})
 	cmd.AddCommand(&cobra.Command{
 		Use:   "stop",
 		Short: "Stop the daemon",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			abs, _ := resolveWorkspace(*wp)
+			abs, err := resolveWorkspace(*wp)
+			if err != nil {
+				return err
+			}
 			d := daemon.New([]string{abs}, filepath.Join(abs, outputDir))
 			return d.Stop()
 		},
@@ -225,7 +235,10 @@ func newDaemonCmd(wp *string) *cobra.Command {
 		Use:   "status",
 		Short: "Show daemon status",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			abs, _ := resolveWorkspace(*wp)
+			abs, err := resolveWorkspace(*wp)
+			if err != nil {
+				return err
+			}
 			d := daemon.New([]string{abs}, filepath.Join(abs, outputDir))
 			fmt.Println(d.Status())
 			return nil
@@ -235,7 +248,10 @@ func newDaemonCmd(wp *string) *cobra.Command {
 		Use:   "restart",
 		Short: "Restart the daemon",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			abs, _ := resolveWorkspace(*wp)
+			abs, err := resolveWorkspace(*wp)
+			if err != nil {
+				return err
+			}
 			d := daemon.New([]string{abs}, filepath.Join(abs, outputDir))
 			return d.Restart()
 		},
