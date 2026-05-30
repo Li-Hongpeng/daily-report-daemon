@@ -174,17 +174,49 @@ cat .daily-report-daemon/context/AGENTS.generated.md
 
 ### 8.2 配置团队功能
 
-编辑 `.daily-report-daemon/config.yaml`：
+**配置文件位置**：`.daily-report-daemon/config.yaml`
+
+不同角色有不同的配置方式：
+
+**成员配置**（所有团队成员）：
+
+```yaml
+# 在 config.yaml 末尾添加
+team:
+  shared_dir: /mnt/nas/team-reports   # 内网共享目录路径（NAS/共享文件夹）
+  role: member                          # 角色：member
+  team_name: 研发一组                   # 团队名称
+```
+
+**组长配置**（需要查看团队所有成员报告时）：
 
 ```yaml
 team:
-  shared_dir: /mnt/nas/team-reports  # 内网共享目录
-  role: member                         # member / lead / admin
+  shared_dir: /mnt/nas/team-reports
+  role: lead                            # 角色：lead（组长）
   team_name: 研发一组
-  members:                             # lead/admin 配置
+  members:                              # 组长需要列出团队成员
     - 张三
     - 李四
+    - 王五
 ```
+
+**管理员配置**（需要查看所有团队报告时）：
+
+```yaml
+team:
+  shared_dir: /mnt/nas/team-reports
+  role: admin                           # 角色：admin（系统管理员）
+  team_name: 全公司
+```
+
+**共享目录要求**：
+- 必须是所有成员都能访问的目录（NAS、共享文件夹、NFS）
+- 目录下自动创建 `成员名/reports/` 子目录
+- 各成员 daemon 扫描后自动同步报告到共享目录
+
+**手动触发同步**：
+生成日报后，运行 `daily-report-daemon run -w .` 会自动将报告同步到配置的 `shared_dir`。
 
 ### 8.3 权限说明
 
@@ -196,17 +228,107 @@ team:
 
 ### 8.4 钉钉推送
 
-1. 在钉钉群中添加自定义机器人，获取 webhook URL
-2. 配置 webhook：
+#### 配置文件位置
+
+`.daily-report-daemon/config.yaml`
+
+#### 钉钉配置字段路径
+
+钉钉配置放在 `publisher` 块的下一级，与 `enabled`、`primary_channel` 平级：
 
 ```yaml
-dingtalk:
-  webhook_url: https://oapi.dingtalk.com/robot/send?access_token=xxx
+publisher:
+  enabled: true                # ← 设为 true 才启用发送
+  primary_channel: dingtalk    # ← 指定钉钉为发送渠道
+  dingtalk:
+    webhook_url: https://oapi.dingtalk.com/robot/send?access_token=你的token
+    auto_send: false           # false=手动确认, true=自动发送
 ```
 
-3. 报告会自动推送到钉钉群（标题包含"日报"关键词）
-4. 支持推送模式：手动确认 / 自动发送 / dry-run 预览
+> ⚠️ 注意：`dingtalk` 是 `publisher` 的下级字段，不是顶级字段。
 
+#### 完整 config.yaml 示例（含钉钉配置）
+
+```yaml
+version: "1"
+language: zh-CN
+
+workspace:
+  name: my-project
+  path: /Users/lee/my-project
+  type: git_repo
+  include:
+    - "**/*"
+  exclude:
+    - "**/node_modules/**"
+    - "**/.venv/**"
+    - "**/dist/**"
+    - "**/build/**"
+    - "**/.git/**"
+    - "**/.env*"
+  max_file_bytes: 262144
+  git_enabled: true
+
+llm:
+  provider: openai-compatible
+  base_url: https://api.deepseek.com
+  model: deepseek-chat
+  api_key_env: DEEPSEEK_API_KEY
+
+reports:
+  output_dir: .daily-report-daemon/reports
+  evidence_level: normal
+
+# ===== 钉钉推送配置（在这里） =====
+publisher:
+  enabled: true
+  primary_channel: dingtalk
+  dingtalk:
+    webhook_url: https://oapi.dingtalk.com/robot/send?access_token=e6177dc536d2f4c773397fcb5e9d8f682e7f1c4ccd5f9709d4d169783c5d9203
+    auto_send: false
+```
+
+#### 手动触发发送
+
+配置好 `publisher` 块后，每次运行日报生成就会触发推送：
+
+```bash
+# 生成日报 → 自动推送到钉钉（如果 publisher.enabled: true）
+daily-report-daemon run -w /path/to/your/project
+
+# 预览模式：只看日报，不推送钉钉
+daily-report-daemon run -w /path/to/your/project --dry-run
+```
+
+#### 自动发送模式
+
+将 `publisher.dingtalk.auto_send` 设为 `true`：
+
+```yaml
+publisher:
+  enabled: true
+  primary_channel: dingtalk
+  dingtalk:
+    webhook_url: https://oapi.dingtalk.com/robot/send?access_token=xxx
+    auto_send: true   # ← 改为 true：不再弹出确认，直接发送
+```
+
+在 daemon 模式下，定时生成的日报会自动发送：
+
+```bash
+# 启动后台服务（每天 17:30 自动生成 + 自动推送）
+daily-report-daemon daemon start -w .
+```
+
+#### 获取钉钉 Webhook URL
+
+1. 打开钉钉 → 进入目标群聊
+2. 群设置（右上角 `···`）→ `智能群助手` → `添加机器人`
+3. 选择「自定义机器人」，填写名称
+4. 安全设置 → 勾选「自定义关键词」→ 填入 `日报`
+5. 复制 Webhook URL，填入 `publisher.dingtalk.webhook_url`
+
+> ⚠️ 钉钉要求在消息中携带关键词。工具自动在标题中包含「日报」，无需手动处理。
 ## 9. 隐私与安全
 
 ### 自动过滤
@@ -263,3 +385,52 @@ rm daily-report-daemon
 - 查看命令帮助：`./daily-report-daemon help`
 - 查看子命令帮助：`./daily-report-daemon scan --help`
 - GitHub Issues：https://github.com/Li-Hongpeng/daily-report-daemon/issues
+
+## 附录：完整配置文件示例
+
+文件位置：`.daily-report-daemon/config.yaml`
+
+```yaml
+version: "1"
+language: zh-CN
+
+# 工作区配置
+workspace:
+  name: my-project
+  path: /Users/lee/my-project
+  type: git_repo
+  include:
+    - "**/*"
+  exclude:
+    - "**/node_modules/**"
+    - "**/.venv/**"
+    - "**/dist/**"
+    - "**/build/**"
+    - "**/.git/**"
+    - "**/.env*"
+  max_file_bytes: 262144
+  git_enabled: true
+
+# LLM 模型配置
+llm:
+  provider: openai-compatible
+  base_url: https://api.deepseek.com
+  model: deepseek-chat
+  api_key_env: DEEPSEEK_API_KEY
+
+# 报告输出
+reports:
+  output_dir: .daily-report-daemon/reports
+  evidence_level: normal
+
+# 【可选】团队配置 - 见 §8.2
+# team:
+#   shared_dir: /mnt/nas/team-reports
+#   role: member
+#   team_name: 研发一组
+
+# 【可选】钉钉推送 - 见 §8.4
+# dingtalk:
+#   webhook_url: https://oapi.dingtalk.com/robot/send?access_token=xxx
+#   auto_send: false
+```
