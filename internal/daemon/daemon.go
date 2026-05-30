@@ -3,10 +3,8 @@ package daemon
 import (
 	"fmt"
 	"os"
-	"os/signal"
 	"path/filepath"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/daily-report-daemon/internal/agent"
@@ -124,7 +122,7 @@ func (d *Daemon) Stop() error {
 	d.mu.Unlock()
 
 	close(d.stopCh)
-	os.Remove(d.PIDFile)
+	platformCleanup(d)
 	fmt.Println("daemon stopped")
 	return nil
 }
@@ -166,16 +164,13 @@ func (d *Daemon) loop() {
 	// Initial scan on start
 	d.runScan()
 
-	// Signal handling for graceful shutdown
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	// Platform-specific signal handling
+	platformInit(d)
 
 	for {
 		select {
 		case <-d.stopCh:
-			return
-		case <-sigCh:
-			d.Stop()
+			platformCleanup(d)
 			return
 		case <-scanTicker.C:
 			d.runScan()
