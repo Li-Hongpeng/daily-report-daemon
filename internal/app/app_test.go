@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/daily-report-daemon/internal/config"
 )
@@ -86,6 +87,84 @@ const APIKey = "`+secret+`"
 	}
 }
 
+func TestScanBaselineFiltersPreexistingCommits(t *testing.T) {
+	dir := setupAppRepo(t)
+
+	first := &App{Workspace: dir, NoLLM: true}
+	firstResult, err := first.Scan()
+	if err != nil {
+		t.Fatalf("first Scan failed: %v", err)
+	}
+	firstEvidence := readAppFile(t, firstResult.EvidencePath)
+	if strings.Contains(firstEvidence, "initial commit") {
+		t.Fatal("first scan should not report commits that are part of the initial baseline")
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".daily-report-daemon", "baseline.json")); err != nil {
+		t.Fatalf("expected baseline file: %v", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(dir, "feature.go"), []byte("package main\n\nfunc feature() {}\n"), 0644); err != nil {
+		t.Fatalf("write feature: %v", err)
+	}
+	runAppGit(t, dir, "add", "feature.go")
+	runAppGit(t, dir, "commit", "-m", "feat: add scan feature")
+
+	second := &App{Workspace: dir, NoLLM: true}
+	secondResult, err := second.Scan()
+	if err != nil {
+		t.Fatalf("second Scan failed: %v", err)
+	}
+	secondEvidence := readAppFile(t, secondResult.EvidencePath)
+	if !strings.Contains(secondEvidence, "feat: add scan feature") {
+		t.Fatal("second scan should report commits after the baseline")
+	}
+	if strings.Contains(secondEvidence, "initial commit") {
+		t.Fatal("second scan should keep filtering baseline-era commits")
+	}
+}
+
+func TestWeeklyReportDryRunUsesCurrentWeekReports(t *testing.T) {
+	dir := setupAppRepo(t)
+	reportsDir := filepath.Join(dir, ".daily-report-daemon", "reports")
+	if err := os.MkdirAll(reportsDir, 0755); err != nil {
+		t.Fatalf("create reports dir: %v", err)
+	}
+	today := time.Now().Format("2006-01-02")
+	if err := os.WriteFile(filepath.Join(reportsDir, today+".md"), []byte("# 日报\n\n完成日报管线测试。\n"), 0644); err != nil {
+		t.Fatalf("write daily report: %v", err)
+	}
+	os.Unsetenv("OPENAI_API_KEY")
+	os.Unsetenv("DEEPSEEK_API_KEY")
+
+	a := &App{Workspace: dir, DryRun: true}
+	result, err := a.WeeklyReport()
+	if err != nil {
+		t.Fatalf("WeeklyReport dry-run failed: %v", err)
+	}
+	if len(result.Reports) != 0 {
+		t.Fatalf("dry-run should not write weekly report, got %+v", result.Reports)
+	}
+	inputPath := filepath.Join(dir, ".daily-report-daemon", "model-io", "weekly-report-input.json")
+	if _, err := os.Stat(inputPath); err != nil {
+		t.Fatalf("expected weekly dry-run model input at %s: %v", inputPath, err)
+	}
+}
+
+func TestReportOutputDirsHonorConfig(t *testing.T) {
+	dir := t.TempDir()
+	a := &App{Workspace: dir}
+	cfg := config.DefaultConfig(dir)
+	cfg.Reports.OutputDir = "custom/daily"
+	cfg.Reports.WeeklyOutputDir = "custom/weekly"
+
+	if got := a.dailyReportDir(&cfg); got != filepath.Join(dir, "custom", "daily") {
+		t.Fatalf("unexpected daily report dir: %s", got)
+	}
+	if got := a.weeklyReportDir(&cfg); got != filepath.Join(dir, "custom", "weekly") {
+		t.Fatalf("unexpected weekly report dir: %s", got)
+	}
+}
+
 func setupAppRepo(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -104,6 +183,15 @@ func setupAppRepo(t *testing.T) string {
 		t.Fatalf("save config: %v", err)
 	}
 	return dir
+}
+
+func readAppFile(t *testing.T, path string) string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	return string(data)
 }
 
 func runAppGit(t *testing.T, dir string, args ...string) {

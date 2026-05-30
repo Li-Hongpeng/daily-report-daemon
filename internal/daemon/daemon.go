@@ -9,10 +9,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/daily-report-daemon/internal/agent"
 	"github.com/daily-report-daemon/internal/app"
 	"github.com/daily-report-daemon/internal/config"
-	"github.com/daily-report-daemon/internal/llm"
 	"github.com/daily-report-daemon/internal/store"
 )
 
@@ -21,6 +19,8 @@ type Daemon struct {
 	Workspaces []string
 	Interval   time.Duration
 	ReportTime string // "17:30" format
+	WeeklyDay  string // "friday" format
+	WeeklyTime string // "17:45" format
 	PIDFile    string
 	DBPath     string
 
@@ -39,6 +39,8 @@ func New(workspaces []string, outputDir string) *Daemon {
 		Workspaces: workspaces,
 		Interval:   30 * time.Minute,
 		ReportTime: "17:30",
+		WeeklyDay:  "friday",
+		WeeklyTime: "17:45",
 		PIDFile:    filepath.Join(outputDir, "daemon.pid"),
 		DBPath:     filepath.Join(outputDir, "daemon.db"),
 		lastScan:   make(map[string]time.Time),
@@ -71,6 +73,7 @@ func (d *Daemon) Start() error {
 
 	// Restore scan state from SQLite for incremental scanning
 	d.LoadState(d.DBPath)
+	d.applyConfig()
 
 	fmt.Println("daemon started")
 	d.wg.Add(1)
@@ -199,6 +202,9 @@ func (d *Daemon) loop() {
 			if d.isReportTime() {
 				d.runReport()
 			}
+			if d.isWeeklyReportTime() {
+				d.runWeeklyReport()
+			}
 		}
 	}
 }
@@ -237,6 +243,14 @@ func readPIDFile(path string) (int, error) {
 func (d *Daemon) isReportTime() bool {
 	now := time.Now().Format("15:04")
 	return now == d.ReportTime
+}
+
+func (d *Daemon) isWeeklyReportTime() bool {
+	now := time.Now()
+	if now.Format("15:04") != d.WeeklyTime {
+		return false
+	}
+	return strings.EqualFold(now.Weekday().String(), d.WeeklyDay)
 }
 
 func (d *Daemon) runScan() {
@@ -294,7 +308,7 @@ func (d *Daemon) persistScan(workspace string, result *app.RunResult) {
 		return
 	}
 
-	runID := fmt.Sprintf("scan-%s", time.Now().Format("20060102-150405"))
+	runID := fmt.Sprintf("scan-%s", time.Now().UTC().Format("20060102-150405.000000000"))
 	if err := st.CreateScanRun(runID, wsID); err != nil {
 		return
 	}
@@ -303,53 +317,84 @@ func (d *Daemon) persistScan(workspace string, result *app.RunResult) {
 
 	// Persist evidence if available
 	if result.EvidencePath != "" {
-		st.MigrateJSONL(result.EvidencePath, filepath.Base(workspace), wsID)
+		st.InsertEvidenceJSONL(result.EvidencePath, filepath.Base(workspace), runID)
 	}
+
+	d.persistReports(st, result.Reports, runID)
 }
 
 func (d *Daemon) runReport() {
 	fmt.Println("[daemon] generating scheduled report...")
 	for _, ws := range d.Workspaces {
-		// Load config for LLM settings
-		cfgPath := filepath.Join(ws, ".daily-report-daemon", "config.yaml")
-		cfg, err := config.Load(cfgPath)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "[daemon] config error for %s: %v\n", ws, err)
-			continue
-		}
-
-		// Create LLM client
-		outputDir := filepath.Join(ws, ".daily-report-daemon")
-		llmClient, err := llm.NewClient(cfg.LLM.BaseURL, cfg.LLM.Model, cfg.LLM.APIKeyEnv, false, outputDir)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "[daemon] LLM client error for %s: %v\n", ws, err)
-			continue
-		}
-
-		// Run scan first to get fresh evidence
 		a := &app.App{Workspace: ws, DryRun: false, NoLLM: false}
-		scanResult, err := a.Scan()
+		result, err := a.Run()
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "[daemon] pre-report scan error: %v\n", err)
+			fmt.Fprintf(os.Stderr, "[daemon] report run error for %s: %v\n", ws, err)
 			continue
 		}
+		d.persistScan(ws, result)
+		fmt.Printf("[daemon] report generated for %s (%d reports)\n", ws, len(result.Reports))
+	}
+}
 
-		// Run agent engine
-		ag := agent.NewAgent(ws, llmClient)
-		var evidenceData []byte
-		if scanResult.EvidencePath != "" {
-			evidenceData, _ = os.ReadFile(scanResult.EvidencePath)
-		}
-		if len(evidenceData) == 0 {
-			evidenceData = []byte(fmt.Sprintf(`{"files":%d,"diffs":%d}`, scanResult.FilesScanned, scanResult.DiffFiles))
-		}
-		_, err = ag.Run(nil, string(evidenceData))
+func (d *Daemon) runWeeklyReport() {
+	fmt.Println("[daemon] generating scheduled weekly report...")
+	for _, ws := range d.Workspaces {
+		a := &app.App{Workspace: ws, DryRun: false, NoLLM: false}
+		result, err := a.WeeklyReport()
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "[daemon] agent error for %s: %v\n", ws, err)
+			fmt.Fprintf(os.Stderr, "[daemon] weekly report error for %s: %v\n", ws, err)
 			continue
 		}
+		st, err := store.Open(d.DBPath)
+		if err == nil {
+			d.persistReports(st, result.Reports, "")
+			st.Close()
+		}
+		fmt.Printf("[daemon] weekly report generated for %s (%d reports)\n", ws, len(result.Reports))
+	}
+}
 
-		fmt.Printf("[daemon] report generated for %s\n", ws)
+func (d *Daemon) persistReports(st *store.Store, reports []string, scanRunID string) {
+	for _, path := range reports {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		reportType, date := reportMetaFromPath(path)
+		st.InsertReport(scanRunID, reportType, date, string(data), "markdown")
+	}
+}
+
+func reportMetaFromPath(path string) (reportType, date string) {
+	name := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+	reportType = "daily"
+	if strings.Contains(filepath.ToSlash(path), "/weekly/") || strings.Contains(name, "-W") {
+		reportType = "weekly"
+	}
+	return reportType, name
+}
+
+func (d *Daemon) applyConfig() {
+	if len(d.Workspaces) == 0 {
+		return
+	}
+	cfgPath := filepath.Join(d.Workspaces[0], ".daily-report-daemon", "config.yaml")
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		return
+	}
+	if cfg.Daemon.ScanIntervalMinutes > 0 {
+		d.Interval = time.Duration(cfg.Daemon.ScanIntervalMinutes) * time.Minute
+	}
+	if cfg.Daemon.DailyReportTime != "" {
+		d.ReportTime = cfg.Daemon.DailyReportTime
+	}
+	if cfg.Daemon.WeeklyReportDay != "" {
+		d.WeeklyDay = cfg.Daemon.WeeklyReportDay
+	}
+	if cfg.Daemon.WeeklyReportTime != "" {
+		d.WeeklyTime = cfg.Daemon.WeeklyReportTime
 	}
 }
 

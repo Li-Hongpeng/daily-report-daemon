@@ -6,11 +6,153 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
+
+	"github.com/cloudwego/eino/components/model"
+	"github.com/cloudwego/eino/schema"
+
+	"github.com/daily-report-daemon/internal/config"
+	"github.com/daily-report-daemon/internal/evidence"
+	"github.com/daily-report-daemon/internal/scanner"
+	"github.com/daily-report-daemon/internal/store"
 )
 
-// setupTestRepo creates a git repo with some activity for testing.
-func setupTestRepo(t *testing.T) string {
+type scriptedModel struct {
+	mu      sync.Mutex
+	outputs []string
+}
+
+func (m *scriptedModel) Generate(ctx context.Context, input []*schema.Message, opts ...model.Option) (*schema.Message, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(m.outputs) == 0 {
+		return schema.AssistantMessage(`{"summary":"empty"}`, nil), nil
+	}
+	out := m.outputs[0]
+	m.outputs = m.outputs[1:]
+	return schema.AssistantMessage(out, nil), nil
+}
+
+func (m *scriptedModel) Stream(ctx context.Context, input []*schema.Message, opts ...model.Option) (*schema.StreamReader[*schema.Message], error) {
+	msg, err := m.Generate(ctx, input, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return schema.StreamReaderFromArray([]*schema.Message{msg}), nil
+}
+
+func TestToolSetBlocksTraversalAndDaemonData(t *testing.T) {
+	dir := setupAgentRepo(t)
+	ws := WorkspaceRef{ID: "ws", Name: "repo", Path: dir, Date: "2026-05-30"}
+	ts := NewWorkspaceToolSet(dir, ws, nil, nil, nil, time.Second)
+
+	if obs := ts.InvokeForFallback(context.Background(), "read_file", `{"path":"../../../etc/passwd"}`); obs.Error == "" {
+		t.Fatal("expected traversal to be blocked")
+	}
+	if err := os.MkdirAll(filepath.Join(dir, ".daily-report-daemon"), 0755); err != nil {
+		t.Fatalf("mkdir daemon dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".daily-report-daemon", "config.yaml"), []byte("secret: x"), 0644); err != nil {
+		t.Fatalf("write daemon config: %v", err)
+	}
+	if obs := ts.InvokeForFallback(context.Background(), "read_file", `{"path":".daily-report-daemon/config.yaml"}`); obs.Error == "" {
+		t.Fatal("expected daemon data to be blocked")
+	}
+}
+
+func TestToolSetRedactsSecrets(t *testing.T) {
+	dir := setupAgentRepo(t)
+	secret := "sk-abcdefghijklmnopqrstuvwxyz123456"
+	if err := os.WriteFile(filepath.Join(dir, "config.txt"), []byte(secret), 0644); err != nil {
+		t.Fatalf("write secret file: %v", err)
+	}
+	ws := WorkspaceRef{ID: "ws", Name: "repo", Path: dir, Date: "2026-05-30"}
+	ts := NewWorkspaceToolSet(dir, ws, nil, nil, nil, time.Second)
+	obs := ts.InvokeForFallback(context.Background(), "read_file", `{"path":"config.txt"}`)
+	if obs.Error != "" {
+		t.Fatalf("read_file error: %s", obs.Error)
+	}
+	if strings.Contains(obs.Output, secret) {
+		t.Fatal("tool output leaked secret")
+	}
+	if !strings.Contains(obs.Output, "[REDACTED]") {
+		t.Fatalf("expected redaction marker, got %q", obs.Output)
+	}
+}
+
+func TestMemoryNamespaceIsolation(t *testing.T) {
+	dir := setupAgentRepo(t)
+	st, err := store.Open(filepath.Join(t.TempDir(), "daemon.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+	ws := WorkspaceRef{ID: "alpha", Name: "repo", Path: dir, Date: "2026-05-30"}
+	ts := NewWorkspaceToolSet(dir, ws, nil, nil, st, time.Second)
+
+	okArgs := `{"namespace":"workspace:alpha:facts","key":"build","value":"{\"cmd\":\"go test ./...\"}"}`
+	if obs := ts.InvokeForFallback(context.Background(), "write_agent_memory", okArgs); obs.Error != "" {
+		t.Fatalf("expected memory write success, got %s", obs.Error)
+	}
+	badArgs := `{"namespace":"workspace:beta:facts","key":"build","value":"x"}`
+	if obs := ts.InvokeForFallback(context.Background(), "write_agent_memory", badArgs); obs.Error == "" {
+		t.Fatal("expected cross-workspace memory write to be blocked")
+	}
+}
+
+func TestRuntimeDailyUsesSupervisorOutputAndWorkspaceBrief(t *testing.T) {
+	dir := setupAgentRepo(t)
+	now := time.Date(2026, 5, 30, 10, 0, 0, 0, time.UTC)
+	items := []evidence.Item{
+		{ID: "diff:main.go:abcd", Type: evidence.TypeDiff, Path: "main.go", Summary: "更新 main.go 的启动逻辑", Source: "git"},
+	}
+	meta := &scanner.ProjectMetadata{Root: dir, Languages: []scanner.LangStat{{Language: "Go", Files: 1}}}
+	model := &scriptedModel{outputs: []string{
+		`{"workspace":{"id":"x","name":"repo","path":"` + dir + `","date":"2026-05-30"},"summary":"完成启动逻辑调整","completed":["完成启动逻辑调整"],"changes":[{"path":"main.go","description":"更新 main.go","evidence_ids":["diff:main.go:abcd"]}],"risks":[],"blockers":[],"next_steps":["补充测试"],"evidence_ids":["diff:main.go:abcd"],"tool_observations":[],"confidence":"medium","memory_updates":[],"context_suggestions":[]}`,
+		`{"date":"2026-05-30","summary":["Supervisor 聚合 workspace brief 形成日报"],"completed":[{"description":"完成启动逻辑调整","evidence_ids":["diff:main.go:abcd"]}],"changes":[{"file":"main.go","description":"更新 main.go","module":"root","evidence_ids":["diff:main.go:abcd"]}],"risks":[],"blockers":[],"next_steps":["补充测试"]}`,
+	}}
+	st, err := store.Open(filepath.Join(t.TempDir(), "daemon.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+	rt := NewRuntimeWithModel(dir, "zh-CN", RuntimeConfigFromConfig(config.AgentConfig{}), model, st, meta, items)
+
+	result, err := rt.GenerateDaily(context.Background(), now)
+	if err != nil {
+		t.Fatalf("GenerateDaily: %v", err)
+	}
+	if result.DailyReport == nil {
+		t.Fatal("expected daily report")
+	}
+	if got := result.DailyReport.Summary[0]; !strings.Contains(got, "Supervisor") {
+		t.Fatalf("expected supervisor output to win, got %q", got)
+	}
+	if len(result.WorkspaceBriefs) != 1 {
+		t.Fatalf("expected one workspace brief, got %d", len(result.WorkspaceBriefs))
+	}
+	if len(result.WorkspaceBriefs[0].ToolObservations) == 0 {
+		t.Fatal("expected at least one workspace tool observation")
+	}
+	var stepCount int
+	if err := st.DB().QueryRow("SELECT COUNT(*) FROM agent_steps WHERE session_id = ?", result.TraceSessionID).Scan(&stepCount); err != nil {
+		t.Fatalf("count agent steps: %v", err)
+	}
+	if stepCount == 0 {
+		t.Fatal("expected Eino event stream to be persisted into agent_steps")
+	}
+	memoryRows, err := st.AgentMemoryByPrefix("workspace:" + result.WorkspaceBriefs[0].Workspace.ID + ":facts:")
+	if err != nil {
+		t.Fatalf("AgentMemoryByPrefix: %v", err)
+	}
+	if len(memoryRows) == 0 {
+		t.Fatal("expected workspace brief memory to be persisted")
+	}
+}
+
+func setupAgentRepo(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
 	run := func(args ...string) {
@@ -30,195 +172,10 @@ func setupTestRepo(t *testing.T) string {
 	run("init")
 	run("config", "user.email", "test@test.com")
 	run("config", "user.name", "test")
-
-	os.WriteFile(filepath.Join(dir, "README.md"), []byte("# Test\n"), 0644)
-	os.WriteFile(filepath.Join(dir, "main.go"), []byte("// TODO: implement\npackage main\n"), 0644)
-	run("add", ".")
-	run("commit", "-m", "initial commit")
-
+	if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main\n\nfunc main() {}\n"), 0644); err != nil {
+		t.Fatalf("write main.go: %v", err)
+	}
+	run("add", "main.go")
+	run("commit", "-m", "initial")
 	return dir
-}
-
-func TestNewAgent(t *testing.T) {
-	dir := setupTestRepo(t)
-	a := NewAgent(dir, nil)
-	if a.Tools == nil {
-		t.Error("expected tools")
-	}
-	if a.Trace == nil {
-		t.Error("expected trace")
-	}
-	if a.Budget == nil {
-		t.Error("expected budget")
-	}
-	if a.Budget.Max != 50000 {
-		t.Errorf("expected budget 50000, got %d", a.Budget.Max)
-	}
-}
-
-func TestAgentRunWithoutLLM(t *testing.T) {
-	dir := setupTestRepo(t)
-	a := NewAgent(dir, nil) // nil LLM = placeholder mode
-
-	evidence := `[{"id":"test","type":"diff","summary":"test diff"}]`
-	result, err := a.Run(context.Background(), evidence)
-	if err != nil {
-		t.Fatalf("Run failed: %v", err)
-	}
-	if result.ReportJSON == "" {
-		t.Error("expected report JSON")
-	}
-	if result.Confidence != "low" {
-		t.Errorf("expected confidence 'low' in placeholder mode, got '%s'", result.Confidence)
-	}
-}
-
-func TestToolExecution(t *testing.T) {
-	dir := setupTestRepo(t)
-	tr := NewToolRegistry(dir)
-
-	// Test list_directory
-	result := tr.Execute(ToolCall{Tool: "list_directory", Args: "."})
-	if result.Error != "" {
-		t.Errorf("list_directory error: %s", result.Error)
-	}
-	if !strings.Contains(result.Output, "README.md") {
-		t.Error("expected README.md in listing")
-	}
-
-	// Test read_file
-	result = tr.Execute(ToolCall{Tool: "read_file", Args: "README.md"})
-	if result.Error != "" {
-		t.Errorf("read_file error: %s", result.Error)
-	}
-	if !strings.Contains(result.Output, "# Test") {
-		t.Error("expected file content")
-	}
-
-	// Test search_pattern
-	result = tr.Execute(ToolCall{Tool: "search_pattern", Args: "."})
-	if result.Error != "" {
-		t.Errorf("search_pattern error: %s", result.Error)
-	}
-	if !strings.Contains(result.Output, "TODO") {
-		t.Error("expected TODO match in search")
-	}
-
-	// Test git_log_explore
-	result = tr.Execute(ToolCall{Tool: "git_log_explore", Args: "README.md"})
-	if result.Error != "" {
-		t.Logf("git_log_explore warning (may be ok in test env): %s", result.Error)
-	}
-
-	// Test git_diff_detail
-	result = tr.Execute(ToolCall{Tool: "git_diff_detail", Args: "README.md"})
-	if result.Error != "" {
-		t.Logf("git_diff_detail warning (may be ok on clean repo): %s", result.Error)
-	}
-}
-
-func TestReadFilePathTraversal(t *testing.T) {
-	dir := setupTestRepo(t)
-	tr := NewToolRegistry(dir)
-
-	result := tr.Execute(ToolCall{Tool: "read_file", Args: "../../../etc/passwd"})
-	if result.Error == "" {
-		t.Error("expected error for path traversal")
-	}
-	if !strings.Contains(result.Error, "traversal") {
-		t.Errorf("expected traversal error, got: %s", result.Error)
-	}
-}
-
-func TestSearchPatternNoGrep(t *testing.T) {
-	dir := setupTestRepo(t)
-	// Make sure search_pattern works without system grep
-	os.WriteFile(filepath.Join(dir, "test.go"), []byte("// FIXME: broken\n"), 0644)
-
-	tr := NewToolRegistry(dir)
-	result := tr.Execute(ToolCall{Tool: "search_pattern", Args: "."})
-	if result.Error != "" {
-		t.Errorf("search_pattern error: %s", result.Error)
-	}
-	if !strings.Contains(result.Output, "FIXME") {
-		t.Error("expected FIXME match")
-	}
-}
-
-func TestAvailableTools(t *testing.T) {
-	dir := setupTestRepo(t)
-	tr := NewToolRegistry(dir)
-	tools := tr.AvailableTools()
-	if len(tools) != 5 {
-		t.Errorf("expected 5 tools, got %d", len(tools))
-	}
-	names := map[string]bool{}
-	for _, t := range tools {
-		names[t.Name] = true
-	}
-	expected := []string{"git_log_explore", "git_diff_detail", "read_file", "search_pattern", "list_directory"}
-	for _, name := range expected {
-		if !names[name] {
-			t.Errorf("missing tool: %s", name)
-		}
-	}
-}
-
-func TestToLLMToolDefs(t *testing.T) {
-	dir := setupTestRepo(t)
-	tr := NewToolRegistry(dir)
-	defs := tr.ToLLMToolDefs()
-	if len(defs) != 5 {
-		t.Errorf("expected 5 defs, got %d", len(defs))
-	}
-}
-
-func TestTrace(t *testing.T) {
-	tr := NewTrace()
-	tr.Log("analyze", "test message")
-	tr.LogToolCall("git_log_explore", "main.go", "commit abc123")
-
-	output := tr.String()
-	if !strings.Contains(output, "analyze") {
-		t.Error("trace missing step name")
-	}
-	if !strings.Contains(output, "git_log_explore") {
-		t.Error("trace missing tool call")
-	}
-}
-
-func TestTokenBudget(t *testing.T) {
-	tb := NewTokenBudget(10000)
-	if !tb.Spend(5000) {
-		t.Error("expected spend success")
-	}
-	if tb.Used() != 5000 {
-		t.Errorf("expected 5000 used, got %d", tb.Used())
-	}
-	if tb.Remaining() != 5000 {
-		t.Errorf("expected 5000 remaining, got %d", tb.Remaining())
-	}
-	if tb.Spend(6000) {
-		t.Error("expected spend failure when over budget")
-	}
-}
-
-func TestAgentFallback(t *testing.T) {
-	a := NewAgent("/tmp/test", nil)
-	result := a.fallback(`{"test":"data"}`)
-	if !result.FellBack {
-		t.Error("expected FellBack=true")
-	}
-	if result.Confidence != "low" {
-		t.Errorf("expected confidence 'low', got '%s'", result.Confidence)
-	}
-}
-
-func TestUnknownTool(t *testing.T) {
-	dir := setupTestRepo(t)
-	tr := NewToolRegistry(dir)
-	result := tr.Execute(ToolCall{Tool: "nonexistent", Args: ""})
-	if result.Error == "" {
-		t.Error("expected error for unknown tool")
-	}
 }

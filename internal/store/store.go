@@ -2,10 +2,14 @@ package store
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
+
+	"github.com/daily-report-daemon/internal/evidence"
 
 	_ "github.com/mattn/go-sqlite3"
 )
@@ -162,24 +166,34 @@ type WorkspaceRow struct {
 func (s *Store) EnsureWorkspace(name, wpath string) (int64, error) {
 	var id int64
 	err := s.db.QueryRow("SELECT id FROM workspaces WHERE path = ?", wpath).Scan(&id)
-	if err == nil { return id, nil }
-	if err != sql.ErrNoRows { return 0, err }
+	if err == nil {
+		return id, nil
+	}
+	if err != sql.ErrNoRows {
+		return 0, err
+	}
 	result, err := s.db.Exec(
 		"INSERT INTO workspaces (name, path, type, enabled, created_at) VALUES (?, ?, 'git_repo', 1, ?)",
 		name, wpath, time.Now().UTC().Format(time.RFC3339),
 	)
-	if err != nil { return 0, err }
+	if err != nil {
+		return 0, err
+	}
 	return result.LastInsertId()
 }
 
 func (s *Store) ListWorkspaces() ([]WorkspaceRow, error) {
 	rows, err := s.db.Query("SELECT id, name, path, type, enabled, created_at FROM workspaces WHERE enabled = 1")
-	if err != nil { return nil, err }
+	if err != nil {
+		return nil, err
+	}
 	defer rows.Close()
 	var out []WorkspaceRow
 	for rows.Next() {
 		var w WorkspaceRow
-		if err := rows.Scan(&w.ID, &w.Name, &w.Path, &w.Type, &w.Enabled, &w.CreatedAt); err != nil { return nil, err }
+		if err := rows.Scan(&w.ID, &w.Name, &w.Path, &w.Type, &w.Enabled, &w.CreatedAt); err != nil {
+			return nil, err
+		}
 		out = append(out, w)
 	}
 	return out, rows.Err()
@@ -187,8 +201,14 @@ func (s *Store) ListWorkspaces() ([]WorkspaceRow, error) {
 
 // ScanRun types
 type ScanRunRow struct {
-	ID string; WorkspaceID int64; StartedAt string; FinishedAt string
-	FilesScanned int; DiffFiles int; Redactions int; Status string
+	ID           string
+	WorkspaceID  int64
+	StartedAt    string
+	FinishedAt   string
+	FilesScanned int
+	DiffFiles    int
+	Redactions   int
+	Status       string
 }
 
 func (s *Store) CreateScanRun(id string, workspaceID int64) error {
@@ -206,17 +226,30 @@ func (s *Store) FinishScanRun(id string, filesScanned, diffFiles, redactions int
 func (s *Store) LatestScanRun(workspaceID int64) (*ScanRunRow, error) {
 	row := s.db.QueryRow(
 		"SELECT id, workspace_id, started_at, finished_at, files_scanned, diff_files, redactions, status FROM scan_runs WHERE workspace_id = ? ORDER BY started_at DESC LIMIT 1", workspaceID)
-	var r ScanRunRow; var finishedAt sql.NullString
+	var r ScanRunRow
+	var finishedAt sql.NullString
 	err := row.Scan(&r.ID, &r.WorkspaceID, &r.StartedAt, &finishedAt, &r.FilesScanned, &r.DiffFiles, &r.Redactions, &r.Status)
-	if err == sql.ErrNoRows { return nil, nil }
-	if err != nil { return nil, err }
-	if finishedAt.Valid { r.FinishedAt = finishedAt.String }
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if finishedAt.Valid {
+		r.FinishedAt = finishedAt.String
+	}
 	return &r, nil
 }
 
 // FileSnapshot types
 type FileSnapshotRow struct {
-	ID int64; WorkspaceID int64; Path string; Size int64; Mtime string; Hash string; LastSeenAt string
+	ID          int64
+	WorkspaceID int64
+	Path        string
+	Size        int64
+	Mtime       string
+	Hash        string
+	LastSeenAt  string
 }
 
 func (s *Store) UpsertFileSnapshot(workspaceID int64, fpath string, size int64, mtime, hash string) error {
@@ -232,24 +265,37 @@ func (s *Store) UpsertFileSnapshot(workspaceID int64, fpath string, size int64, 
 
 func (s *Store) GetFileSnapshot(workspaceID int64, fpath string) (*FileSnapshotRow, error) {
 	row := s.db.QueryRow("SELECT id, workspace_id, path, size, mtime, hash, last_seen_at FROM file_snapshots WHERE workspace_id=? AND path=?", workspaceID, fpath)
-	var fs FileSnapshotRow; var mtime, hash sql.NullString
+	var fs FileSnapshotRow
+	var mtime, hash sql.NullString
 	err := row.Scan(&fs.ID, &fs.WorkspaceID, &fs.Path, &fs.Size, &mtime, &hash, &fs.LastSeenAt)
-	if err == sql.ErrNoRows { return nil, nil }
-	if err != nil { return nil, err }
-	fs.Mtime = mtime.String; fs.Hash = hash.String
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	fs.Mtime = mtime.String
+	fs.Hash = hash.String
 	return &fs, nil
 }
 
 type FileCandidate struct {
-	Path string; Mtime string; Hash string; Size int64
+	Path  string
+	Mtime string
+	Hash  string
+	Size  int64
 }
 
 func (s *Store) ChangedFiles(workspaceID int64, candidates []FileCandidate) ([]string, error) {
 	var changed []string
 	for _, c := range candidates {
 		snap, err := s.GetFileSnapshot(workspaceID, c.Path)
-		if err != nil { return nil, err }
-		if snap == nil || snap.Mtime != c.Mtime || snap.Hash != c.Hash { changed = append(changed, c.Path) }
+		if err != nil {
+			return nil, err
+		}
+		if snap == nil || snap.Mtime != c.Mtime || snap.Hash != c.Hash {
+			changed = append(changed, c.Path)
+		}
 	}
 	return changed, nil
 }
@@ -261,8 +307,15 @@ func (s *Store) PruneFileSnapshots(workspaceID int64, cutoff string) error {
 
 // Evidence types
 type EvidenceRow struct {
-	ID string; ScanRunID string; Type string; Workspace string
-	Path string; Summary string; Sensitivity string; Source string; CreatedAt string
+	ID          string
+	ScanRunID   string
+	Type        string
+	Workspace   string
+	Path        string
+	Summary     string
+	Sensitivity string
+	Source      string
+	CreatedAt   string
 }
 
 func (s *Store) InsertEvidence(e EvidenceRow) error {
@@ -273,13 +326,20 @@ func (s *Store) InsertEvidence(e EvidenceRow) error {
 
 func (s *Store) EvidenceByScanRun(scanRunID string) ([]EvidenceRow, error) {
 	rows, err := s.db.Query("SELECT id, scan_run_id, type, workspace, path, summary, sensitivity, source, created_at FROM evidence WHERE scan_run_id = ?", scanRunID)
-	if err != nil { return nil, err }
+	if err != nil {
+		return nil, err
+	}
 	defer rows.Close()
 	var out []EvidenceRow
 	for rows.Next() {
-		var e EvidenceRow; var path, summary, source sql.NullString
-		if err := rows.Scan(&e.ID, &e.ScanRunID, &e.Type, &e.Workspace, &path, &summary, &e.Sensitivity, &source, &e.CreatedAt); err != nil { return nil, err }
-		e.Path = path.String; e.Summary = summary.String; e.Source = source.String
+		var e EvidenceRow
+		var path, summary, source sql.NullString
+		if err := rows.Scan(&e.ID, &e.ScanRunID, &e.Type, &e.Workspace, &path, &summary, &e.Sensitivity, &source, &e.CreatedAt); err != nil {
+			return nil, err
+		}
+		e.Path = path.String
+		e.Summary = summary.String
+		e.Source = source.String
 		out = append(out, e)
 	}
 	return out, rows.Err()
@@ -287,13 +347,20 @@ func (s *Store) EvidenceByScanRun(scanRunID string) ([]EvidenceRow, error) {
 
 func (s *Store) EvidenceByDateRange(from, to string) ([]EvidenceRow, error) {
 	rows, err := s.db.Query("SELECT id, scan_run_id, type, workspace, path, summary, sensitivity, source, created_at FROM evidence WHERE created_at >= ? AND created_at <= ? ORDER BY created_at", from, to)
-	if err != nil { return nil, err }
+	if err != nil {
+		return nil, err
+	}
 	defer rows.Close()
 	var out []EvidenceRow
 	for rows.Next() {
-		var e EvidenceRow; var path, summary, source sql.NullString
-		if err := rows.Scan(&e.ID, &e.ScanRunID, &e.Type, &e.Workspace, &path, &summary, &e.Sensitivity, &source, &e.CreatedAt); err != nil { return nil, err }
-		e.Path = path.String; e.Summary = summary.String; e.Source = source.String
+		var e EvidenceRow
+		var path, summary, source sql.NullString
+		if err := rows.Scan(&e.ID, &e.ScanRunID, &e.Type, &e.Workspace, &path, &summary, &e.Sensitivity, &source, &e.CreatedAt); err != nil {
+			return nil, err
+		}
+		e.Path = path.String
+		e.Summary = summary.String
+		e.Source = source.String
 		out = append(out, e)
 	}
 	return out, rows.Err()
@@ -301,25 +368,44 @@ func (s *Store) EvidenceByDateRange(from, to string) ([]EvidenceRow, error) {
 
 // Report types
 type ReportRow struct {
-	ID int64; ScanRunID string; ReportType string; Date string; Content string; Format string; CreatedAt string
+	ID         int64
+	ScanRunID  string
+	ReportType string
+	Date       string
+	Content    string
+	Format     string
+	CreatedAt  string
 }
 
 func (s *Store) InsertReport(scanRunID, reportType, date, content, format string) (int64, error) {
+	var runRef any
+	if scanRunID != "" {
+		runRef = scanRunID
+	}
 	result, err := s.db.Exec("INSERT INTO reports (scan_run_id, report_type, date, content, format, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-		scanRunID, reportType, date, content, format, time.Now().UTC().Format(time.RFC3339))
-	if err != nil { return 0, err }
+		runRef, reportType, date, content, format, time.Now().UTC().Format(time.RFC3339))
+	if err != nil {
+		return 0, err
+	}
 	return result.LastInsertId()
 }
 
 func (s *Store) ReportsByDate(date string) ([]ReportRow, error) {
 	rows, err := s.db.Query("SELECT id, scan_run_id, report_type, date, content, format, created_at FROM reports WHERE date = ? ORDER BY created_at", date)
-	if err != nil { return nil, err }
+	if err != nil {
+		return nil, err
+	}
 	defer rows.Close()
 	var out []ReportRow
 	for rows.Next() {
-		var r ReportRow; var scanRunID sql.NullString
-		if err := rows.Scan(&r.ID, &scanRunID, &r.ReportType, &r.Date, &r.Content, &r.Format, &r.CreatedAt); err != nil { return nil, err }
-		if scanRunID.Valid { r.ScanRunID = scanRunID.String }
+		var r ReportRow
+		var scanRunID sql.NullString
+		if err := rows.Scan(&r.ID, &scanRunID, &r.ReportType, &r.Date, &r.Content, &r.Format, &r.CreatedAt); err != nil {
+			return nil, err
+		}
+		if scanRunID.Valid {
+			r.ScanRunID = scanRunID.String
+		}
 		out = append(out, r)
 	}
 	return out, rows.Err()
@@ -327,11 +413,18 @@ func (s *Store) ReportsByDate(date string) ([]ReportRow, error) {
 
 func (s *Store) LatestReport(reportType, date string) (*ReportRow, error) {
 	row := s.db.QueryRow("SELECT id, scan_run_id, report_type, date, content, format, created_at FROM reports WHERE report_type = ? AND date = ? ORDER BY created_at DESC LIMIT 1", reportType, date)
-	var r ReportRow; var scanRunID sql.NullString
+	var r ReportRow
+	var scanRunID sql.NullString
 	err := row.Scan(&r.ID, &scanRunID, &r.ReportType, &r.Date, &r.Content, &r.Format, &r.CreatedAt)
-	if err == sql.ErrNoRows { return nil, nil }
-	if err != nil { return nil, err }
-	if scanRunID.Valid { r.ScanRunID = scanRunID.String }
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if scanRunID.Valid {
+		r.ScanRunID = scanRunID.String
+	}
 	return &r, nil
 }
 
@@ -343,7 +436,10 @@ func (s *Store) CreateAgentSession(id, runID string) error {
 }
 
 func (s *Store) FinishAgentSession(id string, iterations, toolCalls, tokensUsed int, status string, fellBack bool) error {
-	fb := 0; if fellBack { fb = 1 }
+	fb := 0
+	if fellBack {
+		fb = 1
+	}
 	_, err := s.db.Exec("UPDATE agent_sessions SET finished_at=?, iterations=?, tool_calls=?, tokens_used=?, status=?, fell_back=? WHERE id=?",
 		time.Now().UTC().Format(time.RFC3339), iterations, toolCalls, tokensUsed, status, fb, id)
 	return err
@@ -351,9 +447,16 @@ func (s *Store) FinishAgentSession(id string, iterations, toolCalls, tokensUsed 
 
 // Agent steps
 type AgentStepRow struct {
-	ID string; SessionID string; StepType string; StepOrder int
-	InputSummary string; OutputSummary string; ToolCalls string
-	TokenUsed int; DurationMs int; CreatedAt string
+	ID            string
+	SessionID     string
+	StepType      string
+	StepOrder     int
+	InputSummary  string
+	OutputSummary string
+	ToolCalls     string
+	TokenUsed     int
+	DurationMs    int
+	CreatedAt     string
 }
 
 func (s *Store) InsertAgentStep(step AgentStepRow) error {
@@ -364,15 +467,22 @@ func (s *Store) InsertAgentStep(step AgentStepRow) error {
 
 // Agent memory
 type AgentMemoryRow struct {
-	ID string; Key string; Value string; UpdatedAt string
+	ID        string
+	Key       string
+	Value     string
+	UpdatedAt string
 }
 
 func (s *Store) GetAgentMemory(key string) (*AgentMemoryRow, error) {
 	row := s.db.QueryRow("SELECT id, key, value, updated_at FROM agent_memory WHERE key = ?", key)
 	var m AgentMemoryRow
 	err := row.Scan(&m.ID, &m.Key, &m.Value, &m.UpdatedAt)
-	if err == sql.ErrNoRows { return nil, nil }
-	if err != nil { return nil, err }
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
 	return &m, nil
 }
 
@@ -382,39 +492,118 @@ func (s *Store) SetAgentMemory(id, key, value string) error {
 	return err
 }
 
+func (s *Store) AgentMemoryByPrefix(prefix string) ([]AgentMemoryRow, error) {
+	rows, err := s.db.Query("SELECT id, key, value, updated_at FROM agent_memory WHERE key LIKE ? ORDER BY updated_at DESC", prefix+"%")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []AgentMemoryRow
+	for rows.Next() {
+		var m AgentMemoryRow
+		if err := rows.Scan(&m.ID, &m.Key, &m.Value, &m.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
 // MigrateJSONL reads Phase 0 evidence JSONL and inserts into store.
 func (s *Store) MigrateJSONL(jsonlPath, workspaceName string, workspaceID int64) (int, error) {
 	data, err := os.ReadFile(jsonlPath)
-	if err != nil { return 0, fmt.Errorf("read JSONL: %w", err) }
+	if err != nil {
+		return 0, fmt.Errorf("read JSONL: %w", err)
+	}
 	scanRunID := fmt.Sprintf("migration-%s", time.Now().Format("20060102-150405"))
-	if err := s.CreateScanRun(scanRunID, workspaceID); err != nil { return 0, fmt.Errorf("create migration scan run: %w", err) }
+	if err := s.CreateScanRun(scanRunID, workspaceID); err != nil {
+		return 0, fmt.Errorf("create migration scan run: %w", err)
+	}
 	count := 0
 	for _, line := range splitJSONL(string(data)) {
-		if line == "" { continue }
+		if line == "" {
+			continue
+		}
 		e := EvidenceRow{
 			ID: fmt.Sprintf("mig-%d", count), ScanRunID: scanRunID, Workspace: workspaceName,
 			Sensitivity: "low", Source: "jsonl-migration", CreatedAt: time.Now().UTC().Format(time.RFC3339),
 			Summary: truncStr(line, 500), Type: "migrated",
 		}
-		if err := s.InsertEvidence(e); err != nil { continue }
+		if err := s.InsertEvidence(e); err != nil {
+			continue
+		}
 		count++
 	}
-	if err := s.FinishScanRun(scanRunID, count, 0, 0, "completed"); err != nil { return count, fmt.Errorf("finish migration run: %w", err) }
+	if err := s.FinishScanRun(scanRunID, count, 0, 0, "completed"); err != nil {
+		return count, fmt.Errorf("finish migration run: %w", err)
+	}
+	return count, nil
+}
+
+// InsertEvidenceJSONL inserts evidence items from JSONL into an existing scan run.
+func (s *Store) InsertEvidenceJSONL(jsonlPath, workspaceName, scanRunID string) (int, error) {
+	data, err := os.ReadFile(jsonlPath)
+	if err != nil {
+		return 0, fmt.Errorf("read JSONL: %w", err)
+	}
+	count := 0
+	for _, line := range splitJSONL(string(data)) {
+		if line == "" {
+			continue
+		}
+		var item evidence.Item
+		if err := json.Unmarshal([]byte(line), &item); err != nil {
+			continue
+		}
+		createdAt := item.CreatedAt
+		if createdAt == "" {
+			createdAt = time.Now().UTC().Format(time.RFC3339)
+		}
+		workspace := item.Workspace
+		if workspace == "" {
+			workspace = workspaceName
+		}
+		row := EvidenceRow{
+			ID:          item.ID,
+			ScanRunID:   scanRunID,
+			Type:        string(item.Type),
+			Workspace:   workspace,
+			Path:        item.Path,
+			Summary:     item.Summary,
+			Sensitivity: string(item.Sensitivity),
+			Source:      item.Source,
+			CreatedAt:   createdAt,
+		}
+		if row.ID == "" {
+			row.ID = fmt.Sprintf("%s-%d", scanRunID, count)
+		} else {
+			row.ID = fmt.Sprintf("%s:%s", scanRunID, row.ID)
+		}
+		if row.Sensitivity == "" {
+			row.Sensitivity = "low"
+		}
+		if err := s.InsertEvidence(row); err != nil {
+			continue
+		}
+		count++
+	}
 	return count, nil
 }
 
 func splitJSONL(data string) []string {
 	var lines []string
-	current := ""; depth := 0
-	for _, c := range data {
-		current += string(c)
-		if c == '{' { depth++ } else if c == '}' { depth--; if depth == 0 && current != "" { lines = append(lines, current); current = "" } }
+	for _, line := range strings.Split(data, "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			lines = append(lines, line)
+		}
 	}
-	if current != "" { lines = append(lines, current) }
 	return lines
 }
 
 func truncStr(s string, max int) string {
-	if len(s) <= max { return s }
+	if len(s) <= max {
+		return s
+	}
 	return s[:max] + "..."
 }

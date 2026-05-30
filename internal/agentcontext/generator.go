@@ -15,10 +15,10 @@ const MaxLines = 200
 
 // Generator creates AGENTS.generated.md from project metadata and evidence.
 type Generator struct {
-	Root           string
-	OutputDir      string // .daily-report-daemon/context
-	HasAgentMD     bool
-	AgentMDPath    string // path to root AGENTS.md if exists
+	Root        string
+	OutputDir   string // .daily-report-daemon/context
+	HasAgentMD  bool
+	AgentMDPath string // path to root AGENTS.md if exists
 }
 
 // NewGenerator creates a Generator for the given project root.
@@ -138,7 +138,7 @@ func (g *Generator) Generate(meta *scanner.ProjectMetadata, evItems []evidence.I
 
 	// Today's activity
 	b.WriteString("## Today's Activity\n\n")
-	activityItems := filterByDate(evItems, time.Now())
+	activityItems := filterActivityItems(evItems)
 	if len(activityItems) > 0 {
 		for _, item := range activityItems {
 			b.WriteString(fmt.Sprintf("- %s (`%s`)\n", item.Summary, item.ID))
@@ -253,12 +253,11 @@ func extractConventions(meta *scanner.ProjectMetadata) string {
 	return strings.Join(hints, "\n")
 }
 
-func filterByDate(items []evidence.Item, date time.Time) []evidence.Item {
-	dateStr := date.Format("2006-01-02")
+func filterActivityItems(items []evidence.Item) []evidence.Item {
 	var result []evidence.Item
 	for _, item := range items {
-		// Only include items whose summary contains today's date
-		if strings.Contains(item.Summary, dateStr) {
+		switch item.Type {
+		case evidence.TypeDiff, evidence.TypeFileChange, evidence.TypeCommit, evidence.TypeTodo:
 			result = append(result, item)
 		}
 	}

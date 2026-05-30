@@ -1,7 +1,11 @@
 package store
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
+
+	"github.com/daily-report-daemon/internal/evidence"
 )
 
 func newTestStore(t *testing.T) *Store {
@@ -133,6 +137,55 @@ func TestEvidenceCRUD(t *testing.T) {
 	}
 }
 
+func TestInsertEvidenceJSONLPreservesEachScanRun(t *testing.T) {
+	s := newTestStore(t)
+	wsID, _ := s.EnsureWorkspace("test", "/tmp/test-jsonl")
+	if err := s.CreateScanRun("run-a", wsID); err != nil {
+		t.Fatalf("CreateScanRun run-a: %v", err)
+	}
+	if err := s.CreateScanRun("run-b", wsID); err != nil {
+		t.Fatalf("CreateScanRun run-b: %v", err)
+	}
+
+	jsonl := filepath.Join(t.TempDir(), "evidence.jsonl")
+	if err := evidence.SaveJSONL([]evidence.Item{
+		{
+			ID:          "diff:main.go:abcd",
+			Type:        evidence.TypeDiff,
+			Workspace:   "test",
+			Path:        "main.go",
+			Summary:     "modified main.go",
+			Sensitivity: evidence.SensLow,
+			Source:      "git",
+			CreatedAt:   "2026-05-30T00:00:00Z",
+		},
+	}, jsonl); err != nil {
+		t.Fatalf("SaveJSONL: %v", err)
+	}
+
+	if count, err := s.InsertEvidenceJSONL(jsonl, "test", "run-a"); err != nil || count != 1 {
+		t.Fatalf("InsertEvidenceJSONL run-a: count=%d err=%v", count, err)
+	}
+	if count, err := s.InsertEvidenceJSONL(jsonl, "test", "run-b"); err != nil || count != 1 {
+		t.Fatalf("InsertEvidenceJSONL run-b: count=%d err=%v", count, err)
+	}
+
+	aItems, err := s.EvidenceByScanRun("run-a")
+	if err != nil || len(aItems) != 1 {
+		t.Fatalf("EvidenceByScanRun run-a: len=%d err=%v", len(aItems), err)
+	}
+	bItems, err := s.EvidenceByScanRun("run-b")
+	if err != nil || len(bItems) != 1 {
+		t.Fatalf("EvidenceByScanRun run-b: len=%d err=%v", len(bItems), err)
+	}
+	if aItems[0].ID == bItems[0].ID {
+		t.Fatal("stored evidence IDs should include scan run identity to avoid replacing history")
+	}
+	if _, err := os.Stat(jsonl); err != nil {
+		t.Fatalf("test JSONL should still exist: %v", err)
+	}
+}
+
 func TestReportCRUD(t *testing.T) {
 	s := newTestStore(t)
 	wsID, _ := s.EnsureWorkspace("test", "/tmp/test-rpt")
@@ -144,6 +197,11 @@ func TestReportCRUD(t *testing.T) {
 	latest, err := s.LatestReport("daily", "2026-05-29")
 	if err != nil || latest == nil {
 		t.Fatalf("LatestReport: %v", err)
+	}
+
+	weeklyID, err := s.InsertReport("", "weekly", "2026-W22", "# Weekly", "markdown")
+	if err != nil || weeklyID <= 0 {
+		t.Fatalf("InsertReport without scan run: %v, id=%d", err, weeklyID)
 	}
 }
 
@@ -170,5 +228,22 @@ func TestAgentMemory(t *testing.T) {
 	mem2, _ := s.GetAgentMemory("last_date")
 	if mem2.Value != "2026-05-30" {
 		t.Fatalf("expected updated value, got %s", mem2.Value)
+	}
+}
+
+func TestAgentMemoryByPrefix(t *testing.T) {
+	s := newTestStore(t)
+	if err := s.SetAgentMemory("mem-101", "workspace:one:facts:brief", "one"); err != nil {
+		t.Fatalf("SetAgentMemory one: %v", err)
+	}
+	if err := s.SetAgentMemory("mem-102", "workspace:two:facts:brief", "two"); err != nil {
+		t.Fatalf("SetAgentMemory two: %v", err)
+	}
+	rows, err := s.AgentMemoryByPrefix("workspace:one:")
+	if err != nil {
+		t.Fatalf("AgentMemoryByPrefix: %v", err)
+	}
+	if len(rows) != 1 || rows[0].Value != "one" {
+		t.Fatalf("unexpected rows: %+v", rows)
 	}
 }

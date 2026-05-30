@@ -3,6 +3,7 @@ package evidence
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/daily-report-daemon/internal/git"
 	"github.com/daily-report-daemon/internal/sanitize"
@@ -28,6 +29,7 @@ func NewBuilder(workspace string) *Builder {
 // BuildFromGit converts git.Activity into evidence items.
 func (b *Builder) BuildFromGit(act *git.Activity) []Item {
 	var items []Item
+	createdAt := time.Now().UTC().Format(time.RFC3339)
 
 	// Commits
 	for _, c := range act.Commits {
@@ -41,6 +43,7 @@ func (b *Builder) BuildFromGit(act *git.Activity) []Item {
 			RawRef:      c.Hash,
 			Sensitivity: SensLow,
 			Source:      "git",
+			CreatedAt:   createdAt,
 		})
 	}
 
@@ -69,6 +72,7 @@ func (b *Builder) BuildFromGit(act *git.Activity) []Item {
 			RawRef:      fmt.Sprintf("git diff (%s)", d.Scope),
 			Sensitivity: sensForDiff(patch),
 			Source:      "git",
+			CreatedAt:   createdAt,
 		})
 	}
 
@@ -90,6 +94,7 @@ func (b *Builder) BuildFromGit(act *git.Activity) []Item {
 			RawRef:      "git status --porcelain",
 			Sensitivity: SensLow,
 			Source:      "git",
+			CreatedAt:   createdAt,
 		})
 	}
 
@@ -99,6 +104,7 @@ func (b *Builder) BuildFromGit(act *git.Activity) []Item {
 // BuildFromScanner converts scanner.ProjectMetadata into evidence items.
 func (b *Builder) BuildFromScanner(meta *scanner.ProjectMetadata) []Item {
 	var items []Item
+	createdAt := time.Now().UTC().Format(time.RFC3339)
 
 	// Key files as doc snippets
 	for _, kf := range meta.KeyFiles {
@@ -124,6 +130,7 @@ func (b *Builder) BuildFromScanner(meta *scanner.ProjectMetadata) []Item {
 			RawRef:      fmt.Sprintf("scanner:%s", kf.Path),
 			Sensitivity: sensForContent(content),
 			Source:      "scanner",
+			CreatedAt:   createdAt,
 		})
 	}
 
@@ -138,6 +145,7 @@ func (b *Builder) BuildFromScanner(meta *scanner.ProjectMetadata) []Item {
 			RawRef:      cmd.Source,
 			Sensitivity: SensLow,
 			Source:      "scanner",
+			CreatedAt:   createdAt,
 		})
 	}
 	for _, cmd := range meta.TestCommands {
@@ -150,6 +158,7 @@ func (b *Builder) BuildFromScanner(meta *scanner.ProjectMetadata) []Item {
 			RawRef:      cmd.Source,
 			Sensitivity: SensLow,
 			Source:      "scanner",
+			CreatedAt:   createdAt,
 		})
 	}
 

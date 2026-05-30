@@ -207,9 +207,13 @@ func (a *Analyzer) collectStatus() []StatusEntry {
 		if len(line) < 3 {
 			continue
 		}
+		path := strings.TrimSpace(line[2:])
+		if isInternalDaemonPath(path) {
+			continue
+		}
 		entries = append(entries, StatusEntry{
 			XY:   line[:2],
-			Path: strings.TrimSpace(line[2:]),
+			Path: path,
 		})
 	}
 	return entries
@@ -280,6 +284,9 @@ func (a *Analyzer) collectDiffScope(scope string, extraArg string) []Diff {
 			continue
 		}
 		add, del, file := parts[0], parts[1], parts[2]
+		if isInternalDaemonPath(file) {
+			continue
+		}
 		// Binary files show "-" for both sides; skip them for patch collection.
 		isBinary := add == "-" && del == "-"
 		additions := 0
@@ -350,6 +357,16 @@ func IsRepo(path string) bool {
 	return err == nil
 }
 
+// IsAncestor reports whether ancestor is reachable from descendant in repoRoot.
+func IsAncestor(repoRoot, ancestor, descendant string) bool {
+	if ancestor == "" || descendant == "" {
+		return false
+	}
+	cmd := exec.Command("git", "merge-base", "--is-ancestor", ancestor, descendant)
+	cmd.Dir = repoRoot
+	return cmd.Run() == nil
+}
+
 // UntrackedTextFiles returns paths of untracked files that appear to be text
 // (based on extension).
 func (a *Analyzer) UntrackedTextFiles() []string {
@@ -381,6 +398,11 @@ func isTextExtension(ext string) bool {
 		return true
 	}
 	return false
+}
+
+func isInternalDaemonPath(path string) bool {
+	clean := strings.TrimPrefix(filepath.ToSlash(path), "./")
+	return clean == ".daily-report-daemon" || strings.HasPrefix(clean, ".daily-report-daemon/")
 }
 
 // SaveActivity writes the Activity as JSON to the given path.

@@ -97,9 +97,9 @@ func TestGenerate(t *testing.T) {
 
 func TestGenerateNoReadme(t *testing.T) {
 	meta := &scanner.ProjectMetadata{
-		Root:       "/tmp/noreadme",
-		Languages:  []scanner.LangStat{{Language: "Python", Files: 5}},
-		KeyFiles:   []scanner.KeyFile{},
+		Root:      "/tmp/noreadme",
+		Languages: []scanner.LangStat{{Language: "Python", Files: 5}},
+		KeyFiles:  []scanner.KeyFile{},
 	}
 	g := NewGenerator("/tmp/noreadme", t.TempDir())
 	content, err := g.Generate(meta, nil)
@@ -207,5 +207,40 @@ func TestGenerateNoActivity(t *testing.T) {
 	}
 	if !strings.Contains(content, "无明显活动") {
 		t.Error("missing 'no activity' fallback")
+	}
+}
+
+func TestGenerateIncludesCurrentRunActivityRegardlessOfWallClockDate(t *testing.T) {
+	meta := &scanner.ProjectMetadata{
+		Root: "/tmp/activity",
+		KeyFiles: []scanner.KeyFile{
+			{Path: "README.md", Name: "README.md", Content: "# Activity\n\nTest project.\n"},
+		},
+	}
+	ev := []evidence.Item{
+		{
+			ID:        "diff:internal:app.go:1234",
+			Type:      evidence.TypeDiff,
+			Summary:   "unstaged internal/app.go (modified): +12 -3",
+			CreatedAt: "2000-01-01T00:00:00Z",
+		},
+		{
+			ID:        "doc:README.md:5678",
+			Type:      evidence.TypeDocSnippet,
+			Summary:   "Key file: README.md",
+			CreatedAt: "2000-01-01T00:00:00Z",
+		},
+	}
+
+	g := NewGenerator("/tmp/activity", t.TempDir())
+	content, err := g.Generate(meta, ev)
+	if err != nil {
+		t.Fatalf("Generate failed: %v", err)
+	}
+	if !strings.Contains(content, "unstaged internal/app.go") {
+		t.Fatal("current run diff should appear in Today's Activity even when CreatedAt is old")
+	}
+	if strings.Contains(content, "Key file: README.md (`doc:README.md:5678`)") {
+		t.Fatal("static doc snippets should not be listed as today's activity")
 	}
 }

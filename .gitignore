@@ -12,10 +12,8 @@
 .DS_Store
 Thumbs.db
 
-# Project runtime data (not committed; each user has their own)
-.daily-report-daemon/runs/
-.daily-report-daemon/reports/
-.daily-report-daemon/context/
+# Project runtime data and local config (not committed; each user has their own)
+.daily-report-daemon/
 
 # Secrets
 .env

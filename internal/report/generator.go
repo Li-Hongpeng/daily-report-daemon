@@ -7,12 +7,10 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
-
-	"github.com/daily-report-daemon/internal/llm"
 )
 
 // DeveloperMarkdown renders a DailyReportJSON into a developer-oriented Markdown report.
-func DeveloperMarkdown(report *llm.DailyReportJSON, evidenceIndex map[string]string) string {
+func DeveloperMarkdown(report *DailyReportJSON, evidenceIndex map[string]string) string {
 	var b strings.Builder
 
 	date := report.Date

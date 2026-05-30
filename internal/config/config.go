@@ -14,7 +14,9 @@ type Config struct {
 	Language  string          `yaml:"language"`
 	Workspace WorkspaceConfig `yaml:"workspace"` // single workspace in Phase 0
 	LLM       LLMConfig       `yaml:"llm"`
+	Agent     AgentConfig     `yaml:"agent"`
 	Reports   ReportsConfig   `yaml:"reports"`
+	Daemon    DaemonConfig    `yaml:"daemon"`
 	Publisher PublisherConfig `yaml:"publisher"`
 }
 
@@ -38,16 +40,36 @@ type LLMConfig struct {
 	APIKeyEnv string `yaml:"api_key_env"`
 }
 
+// AgentConfig controls the Eino ADK runtime.
+type AgentConfig struct {
+	MaxIterations       int   `yaml:"max_iterations"`
+	MaxToolCalls        int   `yaml:"max_tool_calls"`
+	ToolTimeoutSeconds  int   `yaml:"tool_timeout_seconds"`
+	TotalTimeoutSeconds int   `yaml:"total_timeout_seconds"`
+	TokenBudgetDaily    int   `yaml:"token_budget_daily"`
+	TraceEnabled        *bool `yaml:"trace_enabled"`
+}
+
 // ReportsConfig holds report generation settings.
 type ReportsConfig struct {
-	OutputDir     string `yaml:"output_dir"`
-	EvidenceLevel string `yaml:"evidence_level"`
+	OutputDir       string `yaml:"output_dir"`
+	WeeklyOutputDir string `yaml:"weekly_output_dir"`
+	EvidenceLevel   string `yaml:"evidence_level"`
+	IncludeBaseline bool   `yaml:"include_baseline"`
+}
+
+// DaemonConfig controls background scanning and report schedules.
+type DaemonConfig struct {
+	ScanIntervalMinutes int    `yaml:"scan_interval_minutes"`
+	DailyReportTime     string `yaml:"daily_report_time"`
+	WeeklyReportDay     string `yaml:"weekly_report_day"`
+	WeeklyReportTime    string `yaml:"weekly_report_time"`
 }
 
 // PublisherConfig holds upstream publish settings.
 type PublisherConfig struct {
-	Enabled        bool          `yaml:"enabled"`
-	PrimaryChannel string        `yaml:"primary_channel"`
+	Enabled        bool           `yaml:"enabled"`
+	PrimaryChannel string         `yaml:"primary_channel"`
 	DingTalk       DingTalkConfig `yaml:"dingtalk,omitempty"`
 }
 
@@ -92,9 +114,25 @@ func DefaultConfig(workspacePath string) Config {
 			DocsEnabled:  true,
 		},
 		LLM: defaultLLMConfig(),
+		Agent: AgentConfig{
+			MaxIterations:       8,
+			MaxToolCalls:        12,
+			ToolTimeoutSeconds:  30,
+			TotalTimeoutSeconds: 300,
+			TokenBudgetDaily:    20000,
+			TraceEnabled:        boolPtr(true),
+		},
 		Reports: ReportsConfig{
-			OutputDir:     ".daily-report-daemon/reports",
-			EvidenceLevel: "normal",
+			OutputDir:       ".daily-report-daemon/reports",
+			WeeklyOutputDir: ".daily-report-daemon/reports/weekly",
+			EvidenceLevel:   "normal",
+			IncludeBaseline: false,
+		},
+		Daemon: DaemonConfig{
+			ScanIntervalMinutes: 30,
+			DailyReportTime:     "17:30",
+			WeeklyReportDay:     "friday",
+			WeeklyReportTime:    "17:45",
 		},
 		Publisher: PublisherConfig{
 			Enabled:        false,
@@ -110,6 +148,7 @@ func defaultExcludes() []string {
 		"**/dist/**",
 		"**/build/**",
 		"**/.git/**",
+		"**/.daily-report-daemon/**",
 		"**/.env*",
 		"**/*.pem",
 		"**/*secret*",
@@ -127,7 +166,43 @@ func Load(path string) (*Config, error) {
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("parse config: %w", err)
 	}
+	cfg.ApplyDefaults()
 	return &cfg, nil
+}
+
+// ApplyDefaults fills fields added after older config files were generated.
+func (c *Config) ApplyDefaults() {
+	if c.Language == "" {
+		c.Language = "zh-CN"
+	}
+	if c.Agent.MaxIterations <= 0 {
+		c.Agent.MaxIterations = 8
+	}
+	if c.Agent.MaxToolCalls <= 0 {
+		c.Agent.MaxToolCalls = 12
+	}
+	if c.Agent.ToolTimeoutSeconds <= 0 {
+		c.Agent.ToolTimeoutSeconds = 30
+	}
+	if c.Agent.TotalTimeoutSeconds <= 0 {
+		c.Agent.TotalTimeoutSeconds = 300
+	}
+	if c.Agent.TokenBudgetDaily <= 0 {
+		c.Agent.TokenBudgetDaily = 20000
+	}
+	if c.Agent.TraceEnabled == nil {
+		c.Agent.TraceEnabled = boolPtr(true)
+	}
+	if c.Reports.OutputDir == "" {
+		c.Reports.OutputDir = ".daily-report-daemon/reports"
+	}
+	if c.Reports.WeeklyOutputDir == "" {
+		c.Reports.WeeklyOutputDir = ".daily-report-daemon/reports/weekly"
+	}
+}
+
+func boolPtr(v bool) *bool {
+	return &v
 }
 
 // Save writes the config to a YAML file.

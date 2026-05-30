@@ -2,6 +2,7 @@ package llm
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -71,9 +72,9 @@ type ToolDef struct {
 
 // ToolFunction describes a function the model can call.
 type ToolFunction struct {
-	Name        string     `json:"name"`
-	Description string     `json:"description"`
-	Parameters  ToolParams `json:"parameters"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Parameters  any    `json:"parameters,omitempty"`
 }
 
 // ToolParams describes function parameters in JSON Schema format.
@@ -156,75 +157,28 @@ func (c *Client) Chat(systemPrompt, userPrompt, label string) (*CallResult, erro
 	// Estimate input tokens (rough: 1 token ≈ 4 chars)
 	inputTokens := (len(systemPrompt) + len(userPrompt)) / 2 // token/2 for CJK text
 
-	// Save model input
-	if c.OutputDir != "" {
-		if err := c.saveInput(req, label); err != nil {
-			// Non-fatal; log but continue
-			fmt.Fprintf(os.Stderr, "warn: failed to save model input: %v\n", err)
-		}
-	}
-
-	if c.DryRun {
-		fmt.Fprintf(os.Stderr, "[dry-run] skipping API call for %s\n", label)
-		return &CallResult{
-			Content:     "",
-			InputTokens: inputTokens,
-			DryRun:      true,
-		}, nil
-	}
-
-	body, err := json.Marshal(req)
+	resp, err := c.Complete(context.Background(), req, label)
 	if err != nil {
-		return nil, fmt.Errorf("marshal request: %w", err)
+		return nil, err
 	}
-
-	url := c.BaseURL + "/chat/completions"
-
-	var lastErr error
-	for attempt := 0; attempt <= c.MaxRetries; attempt++ {
-		if attempt > 0 {
-			backoff := time.Duration(attempt) * 2 * time.Second
-			time.Sleep(backoff)
-		}
-
-		resp, err := c.doRequest(url, body)
-		if err != nil {
-			lastErr = err
-			// Retry on 5xx; fail fast on 4xx
-			if isRetryable(err) {
-				continue
-			}
-			return nil, err
-		}
-		if resp == nil {
-			continue
-		}
-
-		// Save raw output
-		if c.OutputDir != "" {
-			c.saveOutput(resp, label)
-		}
-
-		if len(resp.Choices) == 0 {
-			return nil, fmt.Errorf("no choices in response")
-		}
-
-		content := resp.Choices[0].Message.Content
-		outputTokens := 0
-		if resp.Usage != nil {
-			outputTokens = resp.Usage.CompletionTokens
-			inputTokens = resp.Usage.PromptTokens
-		}
-
-		return &CallResult{
-			Content:      content,
-			RawResponse:  *resp,
-			InputTokens:  inputTokens,
-			OutputTokens: outputTokens,
-		}, nil
+	if c.DryRun {
+		return &CallResult{InputTokens: inputTokens, DryRun: true}, nil
 	}
-
-	return nil, fmt.Errorf("all %d retries exhausted: %w", c.MaxRetries+1, lastErr)
+	if len(resp.Choices) == 0 {
+		return nil, fmt.Errorf("no choices in response")
+	}
+	content := resp.Choices[0].Message.Content
+	outputTokens := 0
+	if resp.Usage != nil {
+		outputTokens = resp.Usage.CompletionTokens
+		inputTokens = resp.Usage.PromptTokens
+	}
+	return &CallResult{
+		Content:      content,
+		RawResponse:  *resp,
+		InputTokens:  inputTokens,
+		OutputTokens: outputTokens,
+	}, nil
 }
 
 // ChatWithTools sends a request with tool definitions and returns the response
@@ -242,14 +196,25 @@ func (c *Client) ChatWithTools(systemPrompt, userPrompt string, tools []ToolDef,
 		ToolChoice:  "auto",
 	}
 
+	return c.Complete(context.Background(), req, label)
+}
+
+// Complete sends a raw OpenAI-compatible chat completion request.
+func (c *Client) Complete(ctx context.Context, req ChatRequest, label string) (*ChatResponse, error) {
+	if req.Model == "" {
+		req.Model = c.Model
+	}
 	if c.OutputDir != "" {
-		c.saveInput(req, label)
+		if err := c.saveInput(req, label); err != nil {
+			fmt.Fprintf(os.Stderr, "warn: failed to save model input: %v\n", err)
+		}
 	}
-
 	if c.DryRun {
-		return &ChatResponse{}, nil
+		fmt.Fprintf(os.Stderr, "[dry-run] skipping API call for %s\n", label)
+		return &ChatResponse{
+			Choices: []Choice{{Message: ChoiceMessage{Role: "assistant", Content: ""}}},
+		}, nil
 	}
-
 	body, err := json.Marshal(req)
 	if err != nil {
 		return nil, fmt.Errorf("marshal request: %w", err)
@@ -263,7 +228,7 @@ func (c *Client) ChatWithTools(systemPrompt, userPrompt string, tools []ToolDef,
 			time.Sleep(time.Duration(attempt) * 2 * time.Second)
 		}
 
-		resp, err := c.doRequest(url, body)
+		resp, err := c.doRequest(ctx, url, body)
 		if err != nil {
 			lastErr = err
 			if isRetryable(err) {
@@ -285,8 +250,8 @@ func (c *Client) ChatWithTools(systemPrompt, userPrompt string, tools []ToolDef,
 	return nil, fmt.Errorf("all %d retries exhausted: %w", c.MaxRetries+1, lastErr)
 }
 
-func (c *Client) doRequest(url string, body []byte) (*ChatResponse, error) {
-	httpReq, err := http.NewRequest("POST", url, bytes.NewReader(body))
+func (c *Client) doRequest(ctx context.Context, url string, body []byte) (*ChatResponse, error) {
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}

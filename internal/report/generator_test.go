@@ -4,38 +4,36 @@ import (
 	"os"
 	"strings"
 	"testing"
-
-	"github.com/daily-report-daemon/internal/llm"
 )
 
-func fixtureFullReport() *llm.DailyReportJSON {
-	return &llm.DailyReportJSON{
+func fixtureFullReport() *DailyReportJSON {
+	return &DailyReportJSON{
 		Date:    "2026-05-29",
 		Summary: []string{"完成 daily-report-daemon Phase 0 原型核心模块", "修复 3 个边界条件 bug"},
-		Completed: []llm.WorkItem{
+		Completed: []WorkItem{
 			{Description: "实现 Git Analyzer 模块", EvidenceIDs: []string{"diff:analyzer.go:unstaged"}, Inferred: false},
 			{Description: "实现 File Scanner 模块", EvidenceIDs: []string{"doc:scanner.go"}, Inferred: false},
 		},
-		Changes: []llm.CodeChange{
+		Changes: []CodeChange{
 			{File: "internal/git/analyzer.go", Description: "新增 untracked 文件处理逻辑", Module: "git", EvidenceIDs: []string{"diff:analyzer.go:unstaged"}},
 			{File: "internal/sanitize/sanitize.go", Description: "新增 .env 变体路径过滤", Module: "sanitize", EvidenceIDs: []string{"diff:sanitize.go:unstaged"}, Inferred: false},
 		},
-		Risks: []llm.RiskItem{
+		Risks: []RiskItem{
 			{Description: "LLM 调用超时可能导致报告生成失败", Severity: "medium", EvidenceIDs: nil, Inferred: true},
 		},
-		Blockers: []llm.BlockerItem{},
+		Blockers:  []BlockerItem{},
 		NextSteps: []string{"完成 LLM Client 集成测试", "编写端到端命令"},
 	}
 }
 
-func fixtureEmptyReport() *llm.DailyReportJSON {
-	return &llm.DailyReportJSON{
+func fixtureEmptyReport() *DailyReportJSON {
+	return &DailyReportJSON{
 		Date:      "2026-05-29",
 		Summary:   []string{},
-		Completed: []llm.WorkItem{},
-		Changes:   []llm.CodeChange{},
-		Risks:     []llm.RiskItem{},
-		Blockers:  []llm.BlockerItem{},
+		Completed: []WorkItem{},
+		Changes:   []CodeChange{},
+		Risks:     []RiskItem{},
+		Blockers:  []BlockerItem{},
 		NextSteps: []string{},
 	}
 }
@@ -95,10 +93,10 @@ func TestDeveloperMarkdownEmpty(t *testing.T) {
 }
 
 func TestDeveloperMarkdownInferredItems(t *testing.T) {
-	report := &llm.DailyReportJSON{
+	report := &DailyReportJSON{
 		Date:    "2026-05-29",
 		Summary: []string{"test"},
-		Completed: []llm.WorkItem{
+		Completed: []WorkItem{
 			{Description: "推断项", EvidenceIDs: nil, Inferred: true},
 		},
 	}
@@ -157,10 +155,10 @@ func TestBuildEvidenceIndex(t *testing.T) {
 }
 
 func TestModuleDisplay(t *testing.T) {
-	report := &llm.DailyReportJSON{
+	report := &DailyReportJSON{
 		Date:    "2026-05-29",
 		Summary: []string{"test"},
-		Changes: []llm.CodeChange{
+		Changes: []CodeChange{
 			{File: "main.go", Description: "entry point", Module: "core", EvidenceIDs: []string{"id1"}},
 		},
 	}

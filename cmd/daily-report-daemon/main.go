@@ -39,6 +39,7 @@ agent context files (AGENTS.generated.md) for coding agents.`,
 	rootCmd.AddCommand(newInitCmd(&workspacePath))
 	rootCmd.AddCommand(newScanCmd(&workspacePath, &dryRun, &noLLM))
 	rootCmd.AddCommand(newReportCmd(&workspacePath, &dryRun, &noLLM))
+	rootCmd.AddCommand(newWeeklyCmd(&workspacePath, &dryRun, &noLLM))
 	rootCmd.AddCommand(newAgentContextCmd(&workspacePath, &dryRun, &noLLM))
 	rootCmd.AddCommand(newRunCmd(&workspacePath, &dryRun, &noLLM))
 	rootCmd.AddCommand(newDaemonCmd(&workspacePath))
@@ -148,6 +149,24 @@ func newReportCmd(wp *string, dryRun, noLLM *bool) *cobra.Command {
 			}
 			a := &app.App{Workspace: abs, DryRun: *dryRun, NoLLM: *noLLM}
 			result, err := a.Report()
+			fmt.Print(result.Summary())
+			return err
+		},
+	}
+	return cmd
+}
+
+func newWeeklyCmd(wp *string, dryRun, noLLM *bool) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "weekly",
+		Short: "Generate weekly report from this week's daily reports",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			abs, err := resolveWorkspace(*wp)
+			if err != nil {
+				return err
+			}
+			a := &app.App{Workspace: abs, DryRun: *dryRun, NoLLM: *noLLM}
+			result, err := a.WeeklyReport()
 			fmt.Print(result.Summary())
 			return err
 		},

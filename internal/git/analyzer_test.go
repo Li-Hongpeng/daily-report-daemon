@@ -100,6 +100,31 @@ func TestAnalyzerUnstagedDiff(t *testing.T) {
 	}
 }
 
+func TestAnalyzerSkipsInternalDaemonDirectory(t *testing.T) {
+	dir := setupFixtureRepo(t)
+	internalDir := filepath.Join(dir, ".daily-report-daemon")
+	if err := os.MkdirAll(internalDir, 0755); err != nil {
+		t.Fatalf("mkdir internal dir: %v", err)
+	}
+	writeFile(t, filepath.Join(internalDir, "config.yaml"), "publisher:\n  dingtalk:\n    webhook_url: should-not-leak\n")
+
+	a := NewAnalyzer(dir)
+	act, err := a.Collect()
+	if err != nil {
+		t.Fatalf("Collect failed: %v", err)
+	}
+	for _, status := range act.Status {
+		if status.Path == ".daily-report-daemon/config.yaml" {
+			t.Fatal("internal daemon config should not appear in git status evidence")
+		}
+	}
+	for _, diff := range act.Diffs {
+		if diff.File == ".daily-report-daemon/config.yaml" {
+			t.Fatal("internal daemon config should not appear in git diff evidence")
+		}
+	}
+}
+
 func TestAnalyzerStagedDiff(t *testing.T) {
 	dir := setupFixtureRepo(t)
 

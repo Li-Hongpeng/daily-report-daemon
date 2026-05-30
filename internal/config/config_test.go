@@ -23,6 +23,15 @@ func TestDefaultConfig(t *testing.T) {
 	if !cfg.Workspace.GitEnabled {
 		t.Error("expected git_enabled true")
 	}
+	if cfg.Agent.MaxIterations != 8 {
+		t.Errorf("expected agent max_iterations 8, got %d", cfg.Agent.MaxIterations)
+	}
+	if cfg.Agent.MaxToolCalls != 12 {
+		t.Errorf("expected agent max_tool_calls 12, got %d", cfg.Agent.MaxToolCalls)
+	}
+	if cfg.Agent.TraceEnabled == nil || !*cfg.Agent.TraceEnabled {
+		t.Error("expected agent trace enabled by default")
+	}
 }
 
 func TestSaveAndLoad(t *testing.T) {

@@ -105,6 +105,34 @@ func TestReportTimeDetection(t *testing.T) {
 	}
 }
 
+func TestWeeklyReportTimeDetection(t *testing.T) {
+	dir := t.TempDir()
+	d := New([]string{dir}, filepath.Join(dir, ".daily-report-daemon"))
+
+	now := time.Now()
+	d.WeeklyDay = now.Weekday().String()
+	d.WeeklyTime = now.Format("15:04")
+	if !d.isWeeklyReportTime() {
+		t.Fatal("expected isWeeklyReportTime to be true")
+	}
+
+	d.WeeklyDay = now.AddDate(0, 0, 1).Weekday().String()
+	if d.isWeeklyReportTime() {
+		t.Fatal("expected isWeeklyReportTime to be false for a different weekday")
+	}
+}
+
+func TestReportMetaFromPath(t *testing.T) {
+	reportType, date := reportMetaFromPath("/tmp/reports/2026-05-30.md")
+	if reportType != "daily" || date != "2026-05-30" {
+		t.Fatalf("unexpected daily meta: %s %s", reportType, date)
+	}
+	reportType, date = reportMetaFromPath("/tmp/reports/weekly/2026-W22.md")
+	if reportType != "weekly" || date != "2026-W22" {
+		t.Fatalf("unexpected weekly meta: %s %s", reportType, date)
+	}
+}
+
 func TestLastScan(t *testing.T) {
 	dir := t.TempDir()
 	d := New([]string{dir, "/tmp/other"}, filepath.Join(dir, ".daily-report-daemon"))

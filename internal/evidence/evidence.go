@@ -42,6 +42,7 @@ type Item struct {
 	RawRef      string      `json:"raw_ref"`
 	Sensitivity Sensitivity `json:"sensitivity"`
 	Source      string      `json:"source"` // "git", "scanner"
+	CreatedAt   string      `json:"created_at,omitempty"`
 }
 
 // GenerateID creates a stable evidence ID from type + path + discriminator.
